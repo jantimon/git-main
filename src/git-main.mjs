@@ -73,13 +73,31 @@ async function readFileIfExists(filepath) {
   }
 }
 
+/**
+ * Safely executes git commands with proper branch name escaping
+ * @param {string} branchName 
+ */
+async function isBranchMerged(branchName, mainBranch) {
+  try {
+    // Use -- to separate branch name from the tree object identifier
+    const branchTree = (await $`git rev-parse refs/heads/${branchName}^{tree}`).stdout.trim();
+    const mergeBase = (await $`git merge-base ${mainBranch} refs/heads/${branchName}`).stdout.trim();
+    const tempCommit = (await $`git commit-tree ${branchTree} -p ${mergeBase} -m "temp"`).stdout.trim();
+    const revList = await $`git rev-list ${mainBranch}..${tempCommit}`;
+    return !revList.stdout.trim();
+  } catch (e) {
+    console.error(`Error processing branch ${branchName}:`, e.message);
+    return false;
+  }
+}
+
 async function main() {  
   const defaultRemote = (await $`git remote show -n`).stdout.trim();
   if (!defaultRemote) {
     console.log('❌ no remote repository')
     process.exit(1);
   }
-
+  
   try {
     await $`git fetch`
   } catch (e) {
@@ -163,18 +181,10 @@ async function main() {
       .filter(branch => branch !== mainBranch)
 
     for (const branch of branches) {
-      try {
-        const branchTree = (await $`git rev-parse "${branch}^{tree}"`).stdout.trim()
-        const mergeBase = (await $`git merge-base ${mainBranch} "${branch}"`).stdout.trim()
-        const tempCommit = (await $`git commit-tree "${branchTree}" -p "${mergeBase}" -m "temp"`).stdout.trim()
-        
-        const revList = await $`git rev-list ${mainBranch}..${tempCommit}`
-        if (!revList.stdout.trim()) {
-          console.log(`Deleting branch ${branch} (no unique changes)`)
-          await $`git branch -D "${branch}"`
-        }
-      } catch (e) {
-        console.error(`Error processing branch ${branch}:`, e.message)
+      if (await isBranchMerged(branch, mainBranch)) {
+        console.log(`Deleting branch ${branch} (no unique changes)`)
+        // Use refs/heads/ prefix to ensure we're dealing with the correct reference
+        await $`git branch -D ${branch}`
       }
     }
   } else {
