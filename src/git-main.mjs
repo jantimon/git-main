@@ -249,6 +249,8 @@ async function main() {
       if (safe) {
         log.info(`Deleting branch ${chalk.bold(branch)} (${reason})`);
         await $`git branch -D ${branch}`;
+      } else {
+        log.warning(`Skipping branch ${chalk.bold(branch)} (${reason})`);
       }
     }
   } else {
@@ -261,7 +263,7 @@ async function main() {
       () => installDependencies(packageManager, gitRoot)
     );
   } else if (packageManager) {
-    log.info(`${getLockfile(packageManager)} is unchanged`);
+    log.info(`${await getLockfile(gitRoot)} is unchanged`);
   }
 
   log.success("All done! 🎉");
