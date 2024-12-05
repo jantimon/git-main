@@ -74,20 +74,41 @@ async function readFileIfExists(filepath) {
 }
 
 /**
- * Safely executes git commands with proper branch name escaping
- * @param {string} branchName 
+ * Quickly checks if a local branch can be safely deleted
+ * Uses git's built-in branch management tools for maximum performance
+ * 
+ * @param {string} branchName Name of the branch to check
+ * @param {string} mainBranch Name of the main branch (default: 'master')
+ * @returns {Promise<{safe: boolean, reason?: string}>}
  */
-async function isBranchMerged(branchName, mainBranch) {
+async function canSafelyDeleteBranch(branchName, mainBranch = 'master') {
   try {
-    // Use -- to separate branch name from the tree object identifier
-    const branchTree = (await $`git rev-parse refs/heads/${branchName}^{tree}`).stdout.trim();
-    const mergeBase = (await $`git merge-base ${mainBranch} refs/heads/${branchName}`).stdout.trim();
-    const tempCommit = (await $`git commit-tree ${branchTree} -p ${mergeBase} -m "temp"`).stdout.trim();
-    const revList = await $`git rev-list ${mainBranch}..${tempCommit}`;
-    return !revList.stdout.trim();
+    // `git branch --merged` is very fast as git maintains this information
+    const mergedBranches = (await $`git branch --merged ${mainBranch}`).stdout;
+    
+    // If branch is fully merged, we can safely delete it
+    if (mergedBranches.includes(branchName)) {
+      return { safe: true, reason: 'Branch is fully merged' };
+    }
+
+    // If not merged, do a quick check for identical tree with current main
+    // This is fast because we're only checking one tree hash
+    const branchTree = (await $`git rev-parse "${branchName}"^{tree}`).stdout.trim();
+    const mainTree = (await $`git rev-parse "${mainBranch}"^{tree}`).stdout.trim();
+    
+    if (branchTree === mainTree) {
+      return { safe: true, reason: 'Branch content matches current main' };
+    }
+
+    return { 
+      safe: false, 
+      reason: 'Branch may contain unique commits' 
+    };
   } catch (e) {
-    console.error(`Error processing branch ${branchName}:`, e.message);
-    return false;
+    return { 
+      safe: false, 
+      reason: `Error checking branch: ${e.message}` 
+    };
   }
 }
 
@@ -181,9 +202,9 @@ async function main() {
       .filter(branch => branch !== mainBranch)
 
     for (const branch of branches) {
-      if (await isBranchMerged(branch, mainBranch)) {
+      const { safe } = await canSafelyDeleteBranch(branch, mainBranch)
+      if (safe) {
         console.log(`Deleting branch ${branch} (no unique changes)`)
-        // Use refs/heads/ prefix to ensure we're dealing with the correct reference
         await $`git branch -D ${branch}`
       }
     }
