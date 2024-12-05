@@ -1,0 +1,43 @@
+{
+  "name": "git-main",
+  "version": "0.0.1",
+  "description": "A CLI tool to manage git main/master branches and cleanup",
+  "type": "module",
+  "bin": {
+    "git-main": "./dist/git-main.js"
+  },
+  "files": [
+    "dist/git-main.js"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "git",
+    "cli",
+    "branch",
+    "cleanup",
+    "maintenance"
+  ],
+  "author": "Jan Nicklas",
+  "license": "MIT",
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^25.0.0",
+    "@rollup/plugin-json": "^6.0.0",
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "rollup": "^4.9.1",
+    "zx": "^7.2.3"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jantimon/git-main.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jantimon/git-main/issues"
+  },
+  "homepage": "https://github.com/jantimon/git-main#readme"
+}
