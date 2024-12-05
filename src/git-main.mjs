@@ -1,13 +1,24 @@
 /// @ts-check
 import { $, spinner, question, fs } from "zx";
+import chalk from "chalk";
 // @ts-ignore
 $.quiet = true;
 $.verbose = false;
 
+const log = {
+  info: (msg) => console.log(chalk.blue("ℹ"), msg),
+  success: (msg) => console.log(chalk.green("✓"), msg),
+  warning: (msg) => console.log(chalk.yellow("⚠"), msg),
+  error: (msg) => console.log(chalk.red("✖"), msg),
+  action: (msg) => console.log(chalk.cyan("→"), msg),
+};
+
 const confirmAction = async (message) => {
   let result = "";
   while (result !== "y" && result !== "n") {
-    result = await question(`${message} [y/n]: `, { choices: ["y", "n"] });
+    result = await question(`${chalk.yellow("?")} ${message} [y/n]: `, {
+      choices: ["y", "n"],
+    });
   }
   return result === "y";
 };
@@ -52,9 +63,11 @@ async function installDependencies(packageManager, gitRoot) {
 
 /**
  * Gets the lockfile name for the package manager
- * @param {PackageManager} packageManager
+ * @param {string} gitRoot
  */
-function getLockfile(packageManager) {
+async function getLockfile(gitRoot) {
+  const packageManager = await detectPackageManager(gitRoot);
+  if (!packageManager) return null;
   switch (packageManager) {
     case "yarn":
       return "yarn.lock";
@@ -63,6 +76,17 @@ function getLockfile(packageManager) {
     case "npm":
       return "package-lock.json";
   }
+}
+
+/**
+ * Reads the contents of the lockfile
+ * @param {string} gitRoot
+ * @returns {Promise<string>}
+ */
+async function getLockfileContent(gitRoot) {
+  const lockfile = await getLockfile(gitRoot);
+  if (!lockfile) return "";
+  return await readFileIfExists(`${gitRoot}/${lockfile}`);
 }
 
 /**
@@ -124,15 +148,16 @@ async function canSafelyDeleteBranch(branchName, mainBranch = "master") {
 async function main() {
   const defaultRemote = (await $`git remote show -n`).stdout.trim();
   if (!defaultRemote) {
-    console.log("❌ no remote repository");
+    log.error("No remote repository found");
     process.exit(1);
   }
 
   try {
+    log.action("Fetching latest changes...");
     await $`git fetch`;
   } catch (e) {
     if (e.message.includes("fatal: not a git repository")) {
-      console.log("❌ not a git repository");
+      log.error("Not a git repository");
       process.exit(1);
     }
   }
@@ -144,19 +169,11 @@ async function main() {
   } catch {
     mainBranch = "master";
   }
-  console.log(`switching to main branch: ${mainBranch}`);
+  log.info(`Using main branch: ${chalk.bold(mainBranch)}`);
 
   // Get git root and check package manager changes
   const gitRoot = (await $`git rev-parse --show-toplevel`).stdout.trim();
   const packageManager = await detectPackageManager(gitRoot);
-
-  // Store the original lockfile content before pull
-  let originalLockfileContent = "";
-  if (packageManager) {
-    const lockfile = getLockfile(packageManager);
-    const lockfilePath = `${gitRoot}/${lockfile}`;
-    originalLockfileContent = await readFileIfExists(lockfilePath);
-  }
 
   const currentBranch = (
     await $`git rev-parse --abbrev-ref HEAD`
@@ -165,49 +182,60 @@ async function main() {
   const status = (await $`git status --porcelain`).stdout;
   if (status) {
     if (currentBranch === mainBranch) {
-      console.log(
-        `\n⚠️ you are on ${mainBranch} branch but have uncommitted changes:\n`
-      );
-      await $`git ls-files -mo --exclude-standard`.pipe(process.stdout);
       console.log("");
-      if (await confirmAction("💥 RESET ALL CHANGES?")) {
+      log.warning(
+        `You are on ${chalk.bold(
+          mainBranch
+        )} branch with uncommitted changes:\n`
+      );
+      const files = (await $`git ls-files -mo --exclude-standard`).stdout;
+      files
+        .split("\n")
+        .filter(Boolean)
+        .forEach((file) => {
+          console.log(` ./${chalk.bold(file)}`);
+        });
+      console.log("");
+      if (await confirmAction("Revert all changes?")) {
+        log.action("Resetting working directory...");
         await $`git add --all`;
         await $`git reset --hard HEAD`;
-        console.log("🧹 Clean");
+        log.success("Working directory cleaned");
       } else {
         process.exit(1);
       }
     } else {
-      console.log("❌ branch not clean");
+      log.error("Branch is not clean");
       process.exit(1);
     }
   }
 
+  const originalLockfileContent = await getLockfileContent(gitRoot);
+
   // Switch to main branch if needed
   if (currentBranch !== mainBranch) {
+    log.action(`Switching to ${chalk.bold(mainBranch)} branch...`);
     await $`git checkout ${mainBranch}`;
-  } else {
-    console.log("pull");
   }
 
   // Pull changes
+  log.action("Pulling latest changes...");
   let needsCleanup = true;
   const pullResult = await $`git pull`;
   if (pullResult.stdout.includes("Already up to date.")) {
+    log.info("Repository is already up to date");
     needsCleanup = false;
   }
 
   // Compare lockfile contents after pull
   let hasLockfileChanges = false;
   if (packageManager) {
-    const lockfile = getLockfile(packageManager);
-    const lockfilePath = `${gitRoot}/${lockfile}`;
-    const newLockfileContent = await readFileIfExists(lockfilePath);
+    const newLockfileContent = await getLockfileContent(gitRoot);
     hasLockfileChanges = originalLockfileContent !== newLockfileContent;
   }
 
   if (needsCleanup) {
-    console.log("🧹 cleaning up empty branches");
+    log.action("Cleaning up merged branches...");
 
     const branches = (
       await $`git for-each-ref refs/heads/ --format='%(refname:short)'`
@@ -217,31 +245,32 @@ async function main() {
       .filter((branch) => branch !== mainBranch);
 
     for (const branch of branches) {
-      const { safe } = await canSafelyDeleteBranch(branch, mainBranch);
+      const { safe, reason } = await canSafelyDeleteBranch(branch, mainBranch);
       if (safe) {
-        console.log(`Deleting branch ${branch} (no unique changes)`);
+        log.info(`Deleting branch ${chalk.bold(branch)} (${reason})`);
         await $`git branch -D ${branch}`;
       }
     }
   } else {
-    console.log("skip cleanup");
+    log.info("Skipping branch cleanup");
   }
 
   if (hasLockfileChanges && packageManager) {
-    await spinner(`Installing dependencies with ${packageManager}...`, () =>
-      installDependencies(packageManager, gitRoot)
+    await spinner(
+      `Installing dependencies with ${chalk.bold(packageManager)}...`,
+      () => installDependencies(packageManager, gitRoot)
     );
   } else if (packageManager) {
-    console.log(`${getLockfile(packageManager)} was unchanged`);
+    log.info(`${getLockfile(packageManager)} is unchanged`);
   }
 
-  console.log("✨ done");
+  log.success("All done! 🎉");
 }
 
 main().then(
   () => process.exit(0),
   (error) => {
-    console.error("Error:", error.message);
+    log.error(`Error: ${error.message}`);
     process.exit(1);
   }
 );

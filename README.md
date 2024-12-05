@@ -44,12 +44,14 @@ The tool automatically detects your package manager based on lockfiles:
 
 ```bash
 $ git-main
-switching to main branch: main
-🧹 cleaning up branches
-Deleting branch feature/123 (no unique changes)
-Deleting branch fix/456 (no unique changes)
-Installing dependencies with pnpm...
-✨ done
+ℹ Using main branch: main
+→ Fetching latest changes...
+→ Pulling latest changes...
+→ Cleaning up merged branches...
+ℹ Deleting branch feature/123 (Branch is fully merged)
+ℹ Deleting branch fix/456 (Branch content matches current main)
+→ Installing dependencies with pnpm...
+✓ All done! 🎉
 ```
 
 ## License
