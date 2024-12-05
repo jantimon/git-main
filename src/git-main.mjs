@@ -60,13 +60,26 @@ function getLockfile(packageManager) {
   }
 }
 
+/**
+ * Reads the contents of a file if it exists
+ * @param {string} filepath 
+ * @returns {Promise<string>}
+ */
+async function readFileIfExists(filepath) {
+  try {
+    return await fs.readFile(filepath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 async function main() {  
   const defaultRemote = (await $`git remote show -n`).stdout.trim();
   if (!defaultRemote) {
     console.log('❌ no remote repository')
     process.exit(1);
   }
-  // Start fetch in background
+
   try {
     await $`git fetch`
   } catch (e) {
@@ -87,19 +100,18 @@ async function main() {
 
   // Get git root and check package manager changes
   const gitRoot = (await $`git rev-parse --show-toplevel`).stdout.trim()
-  let hasLockfileChanges = false
-  
   const packageManager = await detectPackageManager(gitRoot);
+  
+  // Store the original lockfile content before pull
+  let originalLockfileContent = '';
   if (packageManager) {
     const lockfile = getLockfile(packageManager);
-    const lockfileDiff = await $`git diff ${defaultRemote}/${mainBranch} head ${lockfile}`;
-    hasLockfileChanges = lockfileDiff.stdout.length > 0;
+    const lockfilePath = `${gitRoot}/${lockfile}`;
+    originalLockfileContent = await readFileIfExists(lockfilePath);
   }
 
-  // Get current branch
   const currentBranch = (await $`git rev-parse --abbrev-ref HEAD`).stdout.trim()
   
-  // Check if working directory is clean
   const status = (await $`git status --porcelain`).stdout
   if (status) {
     if (currentBranch === mainBranch) {
@@ -133,9 +145,17 @@ async function main() {
     needsCleanup = false
   }
 
-  // Check and delete merged branches
+  // Compare lockfile contents after pull
+  let hasLockfileChanges = false;
+  if (packageManager) {
+    const lockfile = getLockfile(packageManager);
+    const lockfilePath = `${gitRoot}/${lockfile}`;
+    const newLockfileContent = await readFileIfExists(lockfilePath);
+    hasLockfileChanges = originalLockfileContent !== newLockfileContent;
+  }
+
   if (needsCleanup) {
-    console.log('🧹 cleaning up branches')
+    console.log('🧹 cleaning up empty branches')
     
     const branches = (await $`git for-each-ref refs/heads/ --format='%(refname:short)'`)
       .stdout.trim()
@@ -161,7 +181,6 @@ async function main() {
     console.log('skip cleanup')
   }
 
-  // Handle dependency changes
   if (hasLockfileChanges && packageManager) {
     await spinner(`Installing dependencies with ${packageManager}...`, () =>
       installDependencies(packageManager, gitRoot)
