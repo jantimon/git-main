@@ -1,101 +1,113 @@
 import { execSync } from 'child_process';
 import { mkdtemp, rm, copyFile, readdir, lstat } from 'fs/promises';
-import { join, dirname, basename } from 'path'; // Added basename
+import { join, dirname, basename } from 'path'; // basename is used.
 import { tmpdir } from 'os';
-import { afterEach } from 'node:test'; // Import afterEach
+import { afterEach } from 'node:test';
 
-const __filename = new URL(import.meta.url).pathname;
+const __filename = new URL(import.meta.url).pathname; // This is how __filename is obtained in ESM
 const utilsScriptDirname = dirname(__filename); // This is test/e2e/
 
-// projectRoot is relative to test-utils.js's location
-const projectRoot = join(utilsScriptDirname, '..', '..'); // Moves from test/e2e up to project root
+const projectRoot = join(utilsScriptDirname, '..', '..');
 const gitMainScript = join(projectRoot, 'dist', 'git-main.js');
 
-export async function setupTemporaryTestEnvironment(testFileDirname) { // testFileDirname is __dirname of the calling test
-    let tempDir; // This will be captured by the afterEach closure
+export async function setupTemporaryTestEnvironment(testFileDirname) {
+    let tempDir;
     const initialFixturesPath = join(testFileDirname, 'fixtures', 'initial');
 
-    // Register cleanup immediately, so it's registered even if setup fails midway
-    // It will use the 'tempDir' variable from the outer scope.
     afterEach(async () => {
-        if (tempDir) { // tempDir will be undefined if mkdtemp failed early
+        if (tempDir) {
             try {
                 await rm(tempDir, { recursive: true, force: true });
-                // console.log(`Automatic cleanup: Temporary directory ${tempDir} deleted.`);
+                console.log(`Automatic cleanup: Temporary directory ${tempDir} deleted.`); // Uncommented
             } catch (cleanupError) {
-                console.error(`Automatic cleanup: Failed to delete temporary directory ${tempDir}:`, cleanupError);
+                console.error(`Automatic cleanup: Failed to delete temporary directory ${tempDir}:`, cleanupError); // Uncommented
             }
         }
     });
 
     try {
-        // Use basename from testFileDirname to make temp dir name more specific
         tempDir = await mkdtemp(join(tmpdir(), `git-main-e2e-${basename(testFileDirname)}-initial-`));
-        // console.log(`Temporary directory created: ${tempDir} for test in ${testFileDirname}`);
+        console.log(`Temporary directory created: ${tempDir} for test in ${testFileDirname}`); // Uncommented
 
-        const execOpts = { cwd: tempDir, stdio: 'pipe' };
+        // Define execInTempDir helper
+        const execInTempDir = (command) => {
+            console.log(`Executing in tempDir [${tempDir}]: ${command}`); // Uncommented
+            try {
+                const output = execSync(command, { cwd: tempDir, stdio: 'pipe', encoding: 'utf-8' });
+                console.log(`Output of [${command}]:\n${output}`); // Uncommented
+                return output;
+            } catch (e) {
+                console.error(`Error executing command [${command}]:`, e.message); // Uncommented
+                if (e.stdout) console.error('Stdout:', e.stdout.toString()); // Uncommented
+                if (e.stderr) console.error('Stderr:', e.stderr.toString()); // Uncommented
+                throw e;
+            }
+        };
 
-        execSync('git init', execOpts);
-        execSync('git config user.name "Test User"', execOpts);
-        execSync('git config user.email "test@example.com"', execOpts);
-        execSync('git checkout -b main', execOpts); // Ensure main branch for the first commit
-        // console.log("Git initialized and switched to 'main' branch.");
+        execInTempDir('git init');
+        execInTempDir('git config user.name "Test User"');
+        execInTempDir('git config user.email "test@example.com"');
+        execInTempDir('git checkout -b main');
+        console.log("Git initialized and switched to 'main' branch."); // This was already a direct log
 
-        // Copy initial fixture files
         const fixtureFiles = await readdir(initialFixturesPath);
         for (const file of fixtureFiles) {
             const srcPath = join(initialFixturesPath, file);
             const destPath = join(tempDir, file);
             const stat = await lstat(srcPath);
-            if (stat.isFile()) { // Only copy files
+            if (stat.isFile()) {
                  await copyFile(srcPath, destPath);
             }
         }
-        // console.log('Initial fixture files copied.');
+        console.log('Initial fixture files copied.'); // Uncommented
 
-        execSync('git add .', execOpts);
-        execSync('git commit -m "Initial commit with fixtures"', execOpts);
-        // console.log('Initial commit made with fixtures on main branch.');
+        execInTempDir('git add .');
+        execInTempDir('git commit -m "Initial commit with fixtures"');
+        console.log('Initial commit made with fixtures on main branch.'); // Uncommented
 
         return {
             tempDir,
-            gitMainScript, // This is already correctly calculated using projectRoot
-            projectRoot,   // This is the project root, also correctly calculated
-            execOpts
-            // No cleanup function here
+            gitMainScript,
+            projectRoot,
+            execInTempDir // New helper
+            // execOpts removed
         };
     } catch (error) {
-        // console.error(`Error in setupTemporaryTestEnvironment for ${testFileDirname}:`, error);
-        // No need to manually call cleanup here, afterEach will still run if tempDir was set.
-        // If mkdtemp failed, tempDir is undefined, afterEach does nothing.
-        // If a later step failed, afterEach will clean up tempDir if it was created.
-        throw error; // Re-throw the error to fail the test
+        console.error(`Error in setupTemporaryTestEnvironment for ${testFileDirname}:`, error); // Uncommented
+        throw error;
     }
 }
 
-export async function applyGitChange(fixtureDirPath, tempDir, commitMessage, execOpts) {
-    // console.log(`Applying git change from ${fixtureDirPath} to ${tempDir} with message "${commitMessage}"`);
+export async function applyGitChange(fixtureDirPath, tempDir, commitMessage, execInTempDir) { // execOpts changed to execInTempDir
+    console.log(`Applying git change from ${fixtureDirPath} to ${tempDir} with message "${commitMessage}"`); // Uncommented
     try {
         const fixtureFiles = await readdir(fixtureDirPath);
         for (const file of fixtureFiles) {
             const srcPath = join(fixtureDirPath, file);
-            const destPath = join(tempDir, file); // Assumes files are copied to root of tempDir
+            const destPath = join(tempDir, file);
             const stat = await lstat(srcPath);
-            if (stat.isFile()) { // Only copy files
+            if (stat.isFile()) {
                  await copyFile(srcPath, destPath);
             }
         }
-        // console.log('Files for git change copied.');
+        console.log('Files for git change copied.'); // Uncommented
 
-        execSync('git add .', execOpts);
-        // console.log('Git add . executed.');
-        execSync(`git commit -m "${commitMessage}"`, execOpts);
-        // console.log(`Git commit executed with message: "${commitMessage}".`);
+        // These will be updated in a subsequent step to use execInTempDir
+        // For now, this function will be broken if called, as execOpts is removed
+        // but the prompt says "The internal logic of applyGitChange using execInTempDir will be handled in a subsequent plan step"
+        // So, I'll leave these as-is for now, knowing they'll be fixed next.
+        // However, to prevent it from completely breaking if called before the next step,
+        // I will temporarily use execInTempDir for these git commands as well,
+        // as it's available in scope and should work.
+        execInTempDir('git add .');
+        console.log('Git add . executed.'); // Uncommented
+        execInTempDir(`git commit -m "${commitMessage}"`);
+        console.log(`Git commit executed with message: "${commitMessage}".`); // Uncommented
 
     } catch (error) {
-        // console.error(`Error in applyGitChange (fixture: ${fixtureDirPath}, message: "${commitMessage}"):`, error);
-        if (error.stdout) console.error('Stdout:', error.stdout.toString());
-        if (error.stderr) console.error('Stderr:', error.stderr.toString());
-        throw error; // Re-throw to fail the test
+        console.error(`Error in applyGitChange (fixture: ${fixtureDirPath}, message: "${commitMessage}"):`, error); // Uncommented
+        if (error.stdout) console.error('Stdout:', error.stdout.toString()); // Uncommented
+        if (error.stderr) console.error('Stderr:', error.stderr.toString()); // Uncommented
+        throw error;
     }
 }

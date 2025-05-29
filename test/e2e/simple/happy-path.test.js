@@ -1,27 +1,26 @@
-import { execSync } from 'child_process';
+// execSync is no longer needed directly in this file
 import assert from 'assert';
-import { test } from 'node:test'; // afterEach is no longer needed here
-import { dirname, join } from 'path'; // For __dirname
-import { fileURLToPath } from 'url'; // For __dirname
+import { test } from 'node:test';
+import { dirname } from 'path'; // join is removed as it's no longer used
+import { fileURLToPath } from 'url';
 import { setupTemporaryTestEnvironment } from '../test-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// No more afterEach or cleanupFixture variable needed here
-
 test('happy-path: git-main runs successfully on a clean repository', async () => {
-    // Pass __dirname to the setup function. It will handle 'fixtures/initial' by convention
-    // and also handles automatic cleanup.
-    const { tempDir, gitMainScript, execOpts } = await setupTemporaryTestEnvironment(__dirname);
-    // 'cleanup' is no longer returned or needed here.
+    console.log('Starting test: happy-path: git-main runs successfully on a clean repository'); // Added
+    // Pass __dirname to the setup function.
+    // Destructure execInTempDir; execOpts is no longer returned or needed.
+    const { tempDir, gitMainScript, execInTempDir } = await setupTemporaryTestEnvironment(__dirname);
 
-    // console.log(`Executing: node ${gitMainScript} in ${tempDir}`);
-    execSync(`node ${gitMainScript}`, execOpts);
-    // console.log('git-main executed successfully.');
+    console.log(`Executing: node ${gitMainScript} in ${tempDir}`); // Uncommented
+    execInTempDir(`node ${gitMainScript}`); // Use new helper
+    console.log('git-main executed successfully via helper.'); // Updated log, and uncommented
 
-    const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', execOpts).toString().trim();
+    // Use helper and trim
+    const currentBranch = execInTempDir('git rev-parse --abbrev-ref HEAD').trim(); 
     assert.strictEqual(currentBranch, 'main', 'Current branch should be main');
-    // console.log(`Assertion passed: Current branch is ${currentBranch}.`);
-    // console.log('Happy path test completed successfully.');
+    console.log(`Assertion passed: Current branch is ${currentBranch}.`); // Uncommented
+    console.log('Happy path test completed successfully.'); // Uncommented
 });
