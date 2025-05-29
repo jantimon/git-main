@@ -1,39 +1,33 @@
 import { execSync } from 'child_process';
-import { readFile, copyFile } from 'fs/promises';
-import { join } from 'path';
+import { readFile } from 'fs/promises'; // copyFile is no longer needed here
+import { dirname, join } from 'path';   // For __dirname and joining paths
+import { fileURLToPath } from 'url';  // For __dirname
 import assert from 'assert';
-import { test, afterEach } from 'node:test';
-import { setupTemporaryTestEnvironment } from '../test-utils.js';
+import { test } from 'node:test';   // afterEach is no longer needed here
+import { setupTemporaryTestEnvironment, applyGitChange } from '../test-utils.js'; // Import applyGitChange
 
-let cleanupFixture;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-afterEach(async () => {
-    if (cleanupFixture) {
-        await cleanupFixture();
-        cleanupFixture = null;
-    }
-});
+// No more afterEach or cleanupFixture variable needed here
 
 test('reset-to-main: git-main switches to main and resets content from diverged feature branch', async () => {
-    // Initial setup with 'initial' fixtures on 'main' branch
-    const { tempDir, gitMainScript, execOpts, cleanup, projectRoot } = await setupTemporaryTestEnvironment('initial');
-    cleanupFixture = cleanup;
+    // setupTemporaryTestEnvironment now takes __dirname and handles initial fixtures by convention
+    const { tempDir, gitMainScript, execOpts } = await setupTemporaryTestEnvironment(__dirname);
+    // 'cleanup' is no longer returned. 'projectRoot' is also not needed here anymore.
 
-    const divergedFixtureDir = join(projectRoot, 'test', 'e2e', 'simple', 'fixtures', 'diverged-change');
-    const initialFixtureDir = join(projectRoot, 'test', 'e2e', 'simple', 'fixtures', 'initial');
+    const divergedFixturePath = join(__dirname, 'fixtures', 'diverged-change');
+    const initialFixturePath = join(__dirname, 'fixtures', 'initial'); // For final assertion
 
     // console.log('Setting up feature branch with diverged content...');
     execSync('git checkout -b feature-branch', execOpts);
     // console.log('Checked out feature-branch.');
 
-    await copyFile(join(divergedFixtureDir, 'README.md'), join(tempDir, 'README.md'));
-    // console.log('Copied diverged README.md.');
-
-    execSync('git add .', execOpts);
-    execSync('git commit -m "Commit on feature-branch with diverged README"', execOpts);
-    // console.log('Committed diverged README on feature-branch.');
+    // Use the new applyGitChange utility
+    await applyGitChange(divergedFixturePath, tempDir, "Commit on feature-branch with diverged README", execOpts);
+    // console.log('Applied git change for diverged README.');
     
-    // Ensure we are on feature-branch before running git-main
+    // Ensure we are on feature-branch before running git-main (if applyGitChange doesn't guarantee it, though it should not change branch)
     execSync('git checkout feature-branch', execOpts);
     // console.log('Switched back to feature-branch to run git-main.');
 
@@ -48,7 +42,8 @@ test('reset-to-main: git-main switches to main and resets content from diverged 
     // console.log(`Assertion passed: Current branch is ${currentBranch}.`);
 
     const readmeContent = await readFile(join(tempDir, 'README.md'), 'utf-8');
-    const initialReadmeContent = await readFile(join(initialFixtureDir, 'README.md'), 'utf-8');
+    // Read initial README content from the conventional path for assertion
+    const initialReadmeContent = await readFile(join(initialFixturePath, 'README.md'), 'utf-8');
     assert.strictEqual(readmeContent, initialReadmeContent, 'README.md content should match initial fixture after git-main');
     // console.log('Assertion passed: README.md content matches initial fixture.');
     // console.log('Reset to main test completed successfully.');
