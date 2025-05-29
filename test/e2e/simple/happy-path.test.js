@@ -1,4 +1,4 @@
-import { dirname } from 'path'; // 'join' was already removed
+import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import assert from 'assert';
 import { test } from 'node:test';
@@ -8,17 +8,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 test('happy-path: git-main runs successfully on a clean repository', async () => {
-    console.log('Starting test: happy-path: git-main runs successfully on a clean repository');
-    
-    // setupTemporaryTestEnvironment now returns a TestEnvironment object
-    const testEnv = await setupTemporaryTestEnvironment(__dirname);
+    console.log('Outer test: happy-path: git-main runs successfully on a clean repository'); // Log for test itself
+    await setupTemporaryTestEnvironment(__dirname, async (testAPI) => {
+        // All test logic is now inside this callback
+        console.log('Starting test logic for: happy-path: git-main runs successfully on a clean repository');
+        
+        console.log(`Executing: node ${testAPI.gitMainScript} in ${testAPI.tempDir}`);
+        testAPI.exec(`node ${testAPI.gitMainScript}`);
+        console.log('git-main executed successfully via testAPI.exec().');
 
-    console.log(`Executing: node ${testEnv.gitMainScript} in ${testEnv.tempDir}`);
-    testEnv.exec(`node ${testEnv.gitMainScript}`); // Use testEnv.exec()
-    console.log('git-main executed successfully via testEnv.exec().'); // Updated log
-
-    const currentBranch = testEnv.exec('git rev-parse --abbrev-ref HEAD').trim(); // Use testEnv.exec()
-    assert.strictEqual(currentBranch, 'main', 'Current branch should be main');
-    console.log(`Assertion passed: Current branch is ${currentBranch}.`);
-    console.log('Happy path test completed successfully.');
+        const currentBranch = testAPI.exec('git rev-parse --abbrev-ref HEAD').trim();
+        assert.strictEqual(currentBranch, 'main', 'Current branch should be main');
+        console.log(`Assertion passed: Current branch is ${currentBranch}.`);
+        console.log('Happy path test logic completed successfully.');
+    });
 });

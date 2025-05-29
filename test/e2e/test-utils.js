@@ -1,8 +1,8 @@
 import { execSync } from 'child_process';
-import { mkdtemp, rm, copyFile, readdir, lstat, mkdir } from 'fs/promises'; // Added mkdir
+import { mkdtemp, rm, copyFile, readdir, lstat, mkdir } from 'fs/promises';
 import { join, dirname, basename } from 'path';
 import { tmpdir } from 'os';
-import { afterEach } from 'node:test';
+// Removed: import { afterEach } from 'node:test';
 
 const __filename = new URL(import.meta.url).pathname;
 const utilsScriptDirname = dirname(__filename);
@@ -12,7 +12,8 @@ const gitMainScript = join(projectRoot, 'dist', 'git-main.js');
 
 /**
  * Sets up a temporary E2E testing environment with a local Git repository
- * and a simulated remote repository.
+ * and a simulated remote repository, then executes a provided callback
+ * function with an API to interact with this environment.
  *
  * This function creates a base temporary directory containing:
  *  1. A 'local/' subdirectory: This is a standard Git repository where test
@@ -24,29 +25,20 @@ const gitMainScript = join(projectRoot, 'dist', 'git-main.js');
  *
  * The 'local/' repository's 'main' branch is pushed to 'origin/main' upon setup.
  *
- * It returns a 'TestEnvironment' object containing paths (to the local repository,
- * project assets, base temp dir) and methods to execute commands within the
- * 'local/' repository and apply further Git changes.
+ * The provided 'testCallback' function is then invoked with a 'TestEnvironment'
+ * object. This object contains paths (to the local repository, project assets,
+ * base temp dir) and methods ('exec', 'applyChange') to execute commands
+ * and apply further Git changes within the 'local/' repository.
  *
- * Automatic cleanup of the entire base temporary directory (including local
- * and remote) is registered via 'afterEach' from 'node:test'.
+ * Cleanup of the entire base temporary directory (including local and remote)
+ * is automatically handled within a 'finally' block after the 'testCallback'
+ * completes or if an error occurs during setup or callback execution.
  */
-export async function setupTemporaryTestEnvironment(testFileDirname) {
-    let baseTempDir; // For cleanup closure, this is the main temp dir from mkdtemp
-    const initialFixturesPath = join(testFileDirname, 'fixtures', 'initial');
-
-    afterEach(async () => {
-        if (baseTempDir) { // Now cleans up baseTempDir
-            try {
-                await rm(baseTempDir, { recursive: true, force: true });
-                console.log(`Automatic cleanup: Base temporary directory ${baseTempDir} deleted.`);
-            } catch (cleanupError) {
-                console.error(`Automatic cleanup: Failed to delete base temporary directory ${baseTempDir}:`, cleanupError);
-            }
-        }
-    });
+export async function setupTemporaryTestEnvironment(testFileDirname, testCallback) {
+    let baseTempDir; // Needs to be accessible in finally
 
     try {
+        // --- Start of existing setup logic ---
         baseTempDir = await mkdtemp(join(tmpdir(), `git-main-e2e-${basename(testFileDirname)}-base-`));
         console.log(`Base temporary directory created: ${baseTempDir}`);
 
@@ -58,16 +50,12 @@ export async function setupTemporaryTestEnvironment(testFileDirname) {
 
         const remoteRepoPath = join(remoteDir, 'upstream.git');
         console.log(`Initializing bare remote repository at: ${remoteRepoPath}`);
-        // Use raw execSync for this one-off command outside localDir context
-        // Quote the path to handle potential spaces, though unlikely with tmpdir()
         execSync(`git init --bare "${remoteRepoPath}"`, { cwd: baseTempDir, stdio: 'pipe', encoding: 'utf-8' });
         console.log('Bare remote repository initialized.');
 
-        // tempDir for TestEnvironment object now refers to localDir.
-        // This is the directory where test operations will typically occur.
-        const tempDir = localDir; 
+        const tempDir = localDir; // tempDir for the TestAPI refers to localDir
 
-        const execInTempDir = (command) => { // Now uses localDir (via tempDir closure)
+        const execInTempDir = (command) => {
             console.log(`Executing in local repo [${tempDir}]: ${command}`);
             try {
                 const output = execSync(command, { cwd: tempDir, stdio: 'pipe', encoding: 'utf-8' });
@@ -80,74 +68,86 @@ export async function setupTemporaryTestEnvironment(testFileDirname) {
                 throw e;
             }
         };
+        
+        // Initial git setup in localDir
+        execInTempDir('git init');
+        console.log('Local repository initialized.');
+        execInTempDir('git config user.name "Test User"');
+        execInTempDir('git config user.email "test@example.com"');
+        console.log('Git user configured in local repository.');
+        execInTempDir('git checkout -b main');
+        console.log("Switched to 'main' branch in local repository.");
+
+        const initialFixturesPath = join(testFileDirname, 'fixtures', 'initial');
+        const fixtureFiles = await readdir(initialFixturesPath); // This is for initial setup
+        for (const file of fixtureFiles) {
+            const srcPath = join(initialFixturesPath, file);
+            const destPath = join(tempDir, file); // tempDir is localDir
+            const stat = await lstat(srcPath);
+            if (stat.isFile()) {
+                await copyFile(srcPath, destPath);
+            }
+        }
+        console.log('Initial fixture files copied to local repository.');
+
+        execInTempDir('git add .');
+        execInTempDir('git commit -m "Initial commit with fixtures"');
+        console.log('Initial commit made in local repository.');
+
+        const relativeRemotePath = join('..', 'remote', 'upstream.git');
+        execInTempDir(`git remote add origin "${relativeRemotePath}"`);
+        console.log("Remote 'origin' added to local repository.");
+        execInTempDir('git push -u origin main');
+        console.log("'main' branch pushed to 'origin'.");
 
         const applyGitChangeLogic = async (fixtureDirPath, commitMessage) => {
-            console.log(`Applying git change from ${fixtureDirPath} to ${tempDir} with message "${commitMessage}"`); // tempDir is localDir
+            console.log(`Applying git change from ${fixtureDirPath} to ${tempDir} with message "${commitMessage}"`);
             try {
-                const fixtureFiles = await readdir(fixtureDirPath);
-                for (const file of fixtureFiles) {
+                const changeFixtureFiles = await readdir(fixtureDirPath); // Renamed to avoid conflict
+                for (const file of changeFixtureFiles) {
                     const srcPath = join(fixtureDirPath, file);
-                    const destPath = join(tempDir, file); // Files copied into localDir
+                    const destPath = join(tempDir, file); // tempDir is localDir
                     const stat = await lstat(srcPath);
                     if (stat.isFile()) {
                         await copyFile(srcPath, destPath);
                     }
                 }
                 console.log('Files for git change copied.');
-                execInTempDir('git add .'); 
-                console.log('Git add . executed.');
-                execInTempDir(`git commit -m "${commitMessage}"`); 
-                console.log(`Git commit executed with message: "${commitMessage}".`);
+                execInTempDir('git add .');
+                console.log('Git add . executed for change.');
+                execInTempDir(`git commit -m "${commitMessage}"`);
+                console.log(`Git commit executed for change with message: "${commitMessage}".`);
             } catch (error) {
                 console.error(`Error in applyGitChangeLogic (fixture: ${fixtureDirPath}, message: "${commitMessage}"):`, error.message);
                 throw error;
             }
         };
+        // --- End of setup logic ---
 
-        // Git operations are now in localDir context via execInTempDir
-        execInTempDir('git init'); // Initialize localDir as a git repo
-        execInTempDir('git config user.name "Test User"');
-        execInTempDir('git config user.email "test@example.com"');
-        execInTempDir('git checkout -b main');
-        console.log(`Git initialized in local directory (${localDir}) and switched to 'main' branch.`);
-
-        const fixtureFiles = await readdir(initialFixturesPath);
-        for (const file of fixtureFiles) {
-            const srcPath = join(initialFixturesPath, file);
-            const destPath = join(tempDir, file); // Copy to localDir
-            const stat = await lstat(srcPath);
-            if (stat.isFile()) {
-                 await copyFile(srcPath, destPath);
-            }
-        }
-        console.log(`Initial fixture files copied into ${localDir}.`);
-
-        execInTempDir('git add .');
-        execInTempDir('git commit -m "Initial commit with fixtures"');
-        console.log(`Initial commit made in local repository (${localDir}).`);
-
-        console.log(`Adding remote 'origin' to local repository, pointing to ${remoteRepoPath}`);
-        const relativeRemotePath = join('..', 'remote', 'upstream.git'); // Path from localDir to remoteDir/upstream.git
-        execInTempDir(`git remote add origin "${relativeRemotePath}"`);
-        console.log("Remote 'origin' added.");
-
-        console.log("Pushing initial 'main' branch to 'origin'.");
-        execInTempDir('git push -u origin main');
-        console.log("'main' branch pushed to 'origin'.");
-        
-        return {
-            tempDir, // This is localDir
-            baseTempDir, 
-            gitMainScript,
-            projectRoot,
+        // Define the TestAPI object to be passed to the callback
+        const testAPI = {
+            tempDir,      // This is localDir
+            baseTempDir,
+            gitMainScript, // Module-level constant
+            projectRoot,   // Module-level constant
             exec: execInTempDir,
             applyChange: applyGitChangeLogic
         };
 
-    } catch (error) {
-        console.error(`Error in setupTemporaryTestEnvironment for ${testFileDirname}:`, error.message);
-        // afterEach will handle cleanup of baseTempDir if it was created.
-        throw error;
+        // Execute the callback with the TestAPI
+        await testCallback(testAPI);
+
+    } finally {
+        if (baseTempDir) {
+            console.log(`Cleaning up base temporary directory: ${baseTempDir}`);
+            try {
+                await rm(baseTempDir, { recursive: true, force: true });
+                console.log(`Base temporary directory ${baseTempDir} deleted.`);
+            } catch (cleanupError) {
+                // Log error but don't rethrow from finally, to let original error (if any) propagate
+                console.error(`Failed to delete base temporary directory ${baseTempDir}:`, cleanupError.message);
+            }
+        }
     }
 }
 
