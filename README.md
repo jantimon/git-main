@@ -54,6 +54,30 @@ $ git-main
 ✓ All done! 🎉
 ```
 
+## Running Tests
+
+This project includes end-to-end (E2E) tests to ensure `git-main` behaves as expected in various scenarios.
+
+### End-to-End Tests
+
+To run the E2E tests locally:
+
+1.  Ensure you have Node.js installed (version 16 or higher).
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
+3.  Build the project:
+    ```bash
+    npm run build
+    ```
+4.  Run the E2E tests:
+    ```bash
+    npm run test:e2e
+    ```
+
+The tests will execute `git-main` in temporary Git repositories to simulate real-world usage.
+
 ## License
 
 MIT © [Jan Nicklas](https://github.com/jantimon)
