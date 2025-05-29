@@ -25,17 +25,10 @@ export async function setupTemporaryTestEnvironment(fixturesSubDir) {
         execSync('git config user.email "test@example.com"', execOpts);
         // console.log('Git user configured.');
 
-        // Determine default branch and ensure it's 'main'
-        let defaultBranch = execSync('git rev-parse --abbrev-ref HEAD', execOpts).toString().trim();
-        if (defaultBranch !== 'main') {
-            execSync(`git branch -m ${defaultBranch} main`, execOpts);
-            // console.log(`Default branch ${defaultBranch} renamed to main.`);
-        } else {
-            // console.log('Default branch is already main.');
-        }
-        // Ensure we are on main branch
-        execSync('git checkout main', execOpts);
-
+        // Directly create and checkout the 'main' branch.
+        // This makes 'main' the active branch for the first commit.
+        execSync('git checkout -b main', execOpts); // Create and switch to main branch
+        // console.log("Switched to 'main' branch (created if it didn't exist).");
 
         // Copy fixture files
         const fixtureFiles = await readdir(specificFixturesPath);
@@ -50,8 +43,8 @@ export async function setupTemporaryTestEnvironment(fixturesSubDir) {
         // console.log('Fixture files copied.');
 
         execSync('git add .', execOpts);
-        execSync('git commit -m "Initial commit with fixtures"', execOpts);
-        // console.log('Initial commit made with fixtures.');
+        execSync('git commit -m "Initial commit with fixtures"', execOpts); // This first commit will be on 'main'
+        // console.log('Initial commit made with fixtures on main branch.');
 
         return {
             tempDir,
