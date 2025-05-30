@@ -1,170 +1,228 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess, SpawnOptions as NodeSpawnOptions } from 'child_process';
 
 // Inline stripAnsi function
 const stripAnsi = (str: string): string => str.replace(/\[[0-9;]*[a-zA-Z]|[0-9;]*[a-zA-Z]/g, '');
 
-// Custom type for spawn options to be more specific if needed, or use NodeSpawnOptions
-// export interface SpawnOptions extends NodeSpawnOptions {
-// // Add any custom options if necessary, otherwise NodeSpawnOptions is fine
-// }
-
-export interface InteractivePrompt {
-  output: string;
-  respond: (input: string) => void;
-  terminate: () => void;
+export interface SpawnOptions extends NodeSpawnOptions {
+  // Custom options can be added here if necessary
 }
 
 export interface InteractiveCLIResult {
   code: number | null;
-  fullOutput: string; // Renamed from 'output' to avoid confusion with prompt output
+  fullOutput: string;
 }
 
-async function* runInteractive(
-  command: string,
-  options?: import('child_process').SpawnOptions
-): AsyncGenerator<InteractivePrompt, InteractiveCLIResult, string | undefined> {
+interface WaitForTextRequest {
+  textToMatch: string | RegExp;
+  resolve: (matchedOutput: string) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+  originalTimeout: number; // For error messages
+  startTime: number; // For error messages
+}
+
+export interface InteractiveCLISession {
+  waitForText(textToMatch: string | RegExp, timeoutMs?: number): Promise<string>;
+  respond(input: string): void;
+  waitForEnd(timeoutMs?: number): Promise<InteractiveCLIResult>;
+  terminate(): void;
+  pid(): number | undefined;
+}
+
+export function createInteractiveCLI(command: string, options?: SpawnOptions): InteractiveCLISession {
   const [cmd, ...args] = command.split(' ');
-  const child = spawn(cmd, args, {
+  const child: ChildProcess = spawn(cmd, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     ...options,
   });
 
-  let accumulatedOutputSinceLastPrompt = '';
-  let fullSessionOutput = ''; // To capture all output for the final result
-  let resolvePrompt: (() => void) | null = null;
-  let manualClose = false;
+  let fullSessionOutput = '';
+  let currentOutputBuffer = ''; // Stores stripped output
+  let processExited = false;
+  let exitCode: number | null = null;
   let processError: Error | null = null;
 
-  const createPromptPromise = (): Promise<void> =>
-    new Promise<void>((resolve) => {
-      resolvePrompt = resolve;
-    });
+  const waitForTextQueue: WaitForTextRequest[] = [];
+  let closePromise: Promise<InteractiveCLIResult> | null = null;
+  let closeResolve: ((result: InteractiveCLIResult) => void) | null = null;
+  let closeReject: ((error: Error) => void) | null = null;
 
-  let promptPromise = createPromptPromise();
 
-  const onData = (data: Buffer) => {
-    const text = data.toString(); // Keep raw text with ANSI for now, strip before yielding
-    accumulatedOutputSinceLastPrompt += text;
-    fullSessionOutput += text;
-    // Simple prompt detection: ends with ' [y\/n]: ' or similar question marks, or known prompts.
-    // Strip ANSI for prompt detection only.
-    if (stripAnsi(text.trim()).match(/(?:\[y\/n\]:|\?)$/i)) { // Uses the inline stripAnsi
-      if (resolvePrompt) {
-        resolvePrompt();
+  const processData = (data: Buffer) => {
+    const rawText = data.toString();
+    fullSessionOutput += rawText; // Keep raw for full output if needed, but strip for matching
+    const strippedText = stripAnsi(rawText);
+    currentOutputBuffer += strippedText;
+
+    // Check pending waitForText requests
+    for (let i = waitForTextQueue.length - 1; i >= 0; i--) {
+      const request = waitForTextQueue[i];
+      let match: RegExpMatchArray | null | number = null;
+
+      if (request.textToMatch instanceof RegExp) {
+        match = currentOutputBuffer.match(request.textToMatch);
+      } else {
+        const idx = currentOutputBuffer.indexOf(request.textToMatch);
+        if (idx !== -1) {
+          match = idx;
+        }
+      }
+
+      if (match !== null) {
+        clearTimeout(request.timer);
+        let matchedPortion: string;
+        if (typeof match === 'number') { // string.indexOf case
+          matchedPortion = currentOutputBuffer.substring(0, match + request.textToMatch.length);
+          currentOutputBuffer = currentOutputBuffer.substring(match + request.textToMatch.length);
+        } else { // RegExp.match case
+          // match[0] is the matched string, match.index is its start
+          matchedPortion = currentOutputBuffer.substring(0, (match.index || 0) + match[0].length);
+          currentOutputBuffer = currentOutputBuffer.substring((match.index || 0) + match[0].length);
+        }
+        request.resolve(matchedPortion);
+        waitForTextQueue.splice(i, 1); // Remove fulfilled request
       }
     }
   };
 
-  child.stdout!.on('data', onData);
-  child.stderr!.on('data', onData);
+  child.stdout?.on('data', processData);
+  child.stderr?.on('data', processData);
 
-  child.on('error', (err) => {
+  child.on('error', (err: Error) => {
     processError = err;
-    if (resolvePrompt) resolvePrompt(); // Unblock the loop on error
-  });
-
-  child.on('close', (code, signal) => {
-    if (manualClose) return;
-    if (code !== 0 && signal !== 'SIGTERM' && !processError) { // SIGTERM is used by terminate()
-        processError = new Error(`Process exited unexpectedly with code ${code} signal ${signal}. Output:
-${stripAnsi(fullSessionOutput)}`); // Uses the inline stripAnsi
-    }
-    if (resolvePrompt) resolvePrompt(); // Unblock the loop on close
-  });
-
-  try {
-    while (!child.killed && !processError) {
-      await promptPromise;
-
-      if (processError) throw processError; // Error detected by event handlers
-      if (child.killed || child.exitCode !== null) break; // Process ended
-
-      const outputToYield = stripAnsi(accumulatedOutputSinceLastPrompt); // Uses the inline stripAnsi
-      accumulatedOutputSinceLastPrompt = ''; // Reset for next interaction
-
-      // Before yielding, check if the process has already exited cleanly.
-      if (child.exitCode === 0 && outputToYield.trim() === '' && !child.stdout!.readable && !child.stderr!.readable) {
-           break;
-      }
-
-      const response: string | undefined = yield {
-        output: outputToYield,
-        respond: (input: string) => {
-          if (!child.killed && child.stdin!.writable) {
-            child.stdin!.write(Buffer.from(input + '\n')); // Use Buffer
-            promptPromise = createPromptPromise(); 
-          } else {
-            // console.warn('CLI Helper: Attempted to respond to a killed or non-writable process.');
-          }
-        },
-        terminate: () => {
-          if (!child.killed) {
-            // console.log('CLI Helper: Terminating process manually.');
-            manualClose = true;
-            child.kill('SIGTERM');
-            if (resolvePrompt) resolvePrompt(); 
-          }
-        },
-      };
-    }
-    if (processError && !manualClose) throw processError;
-
-  } catch (error:any) {
-    if (!manualClose) { 
-        const errorMessage = error.message || "Error during interactive session";
-        if (!errorMessage.includes("Output:\n")) { 
-            error.message = `${errorMessage}\nFull Output:\n${stripAnsi(fullSessionOutput)}`; // Uses the inline stripAnsi
-        }
-        console.error("CLI Helper:", error.message);
-        throw error;
-    }
-  } finally {
-    if (!child.killed && !manualClose) {
-      // console.warn('CLI Helper: Process was not killed at end of generator, force killing.');
-      manualClose = true; 
-      child.kill('SIGTERM');
-    }
-  }
-  
-  const exitCode = await new Promise<number | null>((resolve) => {
-    if (child.exitCode !== null) {
-      resolve(child.exitCode);
-    } else {
-      child.on('close', (code) => resolve(code));
+    processExited = true; // Treat as exited for pending operations
+    // Reject pending waitForText requests
+    waitForTextQueue.forEach(req => {
+      clearTimeout(req.timer);
+      req.reject(new Error(`Process error occurred: ${err.message}. Output received before error: ${currentOutputBuffer}`));
+    });
+    waitForTextQueue.length = 0;
+    if (closeReject) {
+      closeReject(err);
     }
   });
 
-  return { code: exitCode, fullOutput: stripAnsi(fullSessionOutput) }; // Uses the inline stripAnsi
-}
+  child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+    exitCode = code;
+    processExited = true;
+    // Reject any remaining waitForText requests because the process closed before they were met
+    waitForTextQueue.forEach(req => {
+      clearTimeout(req.timer);
+      const timeSpent = Date.now() - req.startTime;
+      req.reject(new Error(
+        `Process closed (code ${code}, signal ${signal}) before text "${String(req.textToMatch)}" was found. Timeout was ${req.originalTimeout}ms, spent ${timeSpent}ms. Output received: "${currentOutputBuffer}"`
+      ));
+    });
+    waitForTextQueue.length = 0;
 
-
-export interface InteractiveCLISession {
-  [Symbol.asyncIterator](): AsyncGenerator<InteractivePrompt, InteractiveCLIResult, string | undefined>;
-  getResult(): Promise<InteractiveCLIResult>;
-}
-
-export function createInteractiveCLI(command: string, options?: import('child_process').SpawnOptions): InteractiveCLISession {
-  const gen = runInteractive(command, options);
-  let lastResponse: string | undefined = undefined; 
+    if (closeResolve) {
+      closeResolve({ code: exitCode, fullOutput: stripAnsi(fullSessionOutput) });
+    }
+  });
 
   return {
-    async *[Symbol.asyncIterator]() {
-      let result = await gen.next(lastResponse); 
-      while (!result.done) {
-        const responseFromTest: string | undefined = yield result.value;
-        lastResponse = responseFromTest; 
-        result = await gen.next(responseFromTest);
-      }
-      return result.value; 
+    pid(): number | undefined {
+      return child.pid;
     },
-    getResult: async (): Promise<InteractiveCLIResult> => {
-      let result = await gen.next(lastResponse); 
-      while(!result.done) {
-        // console.warn("CLI Helper: getResult() called while generator is still yielding prompts. Advancing with no input.");
-        lastResponse = undefined; 
-        result = await gen.next(undefined);
+
+    async waitForText(textToMatch: string | RegExp, timeoutMs: number = 200): Promise<string> {
+      if (processExited && processError) {
+        return Promise.reject(new Error(`Process has already exited with error: ${processError.message}. Full output: ${stripAnsi(fullSessionOutput)}`));
       }
-      return result.value;
-    }
+      if (processExited) {
+         return Promise.reject(new Error(`Process has already exited with code ${exitCode}. Full output: ${stripAnsi(fullSessionOutput)}`));
+      }
+
+      return new Promise<string>((resolve, reject) => {
+        const startTime = Date.now();
+        // Check immediate buffer first
+        let match: RegExpMatchArray | null | number = null;
+        if (textToMatch instanceof RegExp) {
+            match = currentOutputBuffer.match(textToMatch);
+        } else {
+            const idx = currentOutputBuffer.indexOf(textToMatch as string);
+            if (idx !== -1) match = idx;
+        }
+
+        if (match !== null) {
+            let matchedPortion: string;
+            if (typeof match === 'number') {
+                matchedPortion = currentOutputBuffer.substring(0, match + (textToMatch as string).length);
+                currentOutputBuffer = currentOutputBuffer.substring(match + (textToMatch as string).length);
+            } else {
+                matchedPortion = currentOutputBuffer.substring(0, (match.index || 0) + match[0].length);
+                currentOutputBuffer = currentOutputBuffer.substring((match.index || 0) + match[0].length);
+            }
+            resolve(matchedPortion);
+            return;
+        }
+        
+        // If not found immediately, queue the request
+        const timer = setTimeout(() => {
+          const queueIndex = waitForTextQueue.findIndex(req => req.timer === timer);
+          if (queueIndex !== -1) {
+            waitForTextQueue.splice(queueIndex, 1); // Remove from queue
+          }
+          const timeSpent = Date.now() - startTime;
+          reject(new Error(
+            `Timeout after ${timeSpent}ms waiting for text: "${String(textToMatch)}". Output received during wait: "${stripAnsi(currentOutputBuffer)}"`
+          ));
+        }, timeoutMs);
+
+        waitForTextQueue.push({ textToMatch, resolve, reject, timer, originalTimeout: timeoutMs, startTime });
+      });
+    },
+
+    respond(input: string): void {
+      if (child.stdin && !child.stdin.destroyed && !processExited) {
+        child.stdin.write(input + '\n');
+      } else {
+        console.warn('CLI Helper: Attempted to respond to a closed or non-writable process.');
+      }
+    },
+
+    async waitForEnd(timeoutMs: number = 2000): Promise<InteractiveCLIResult> {
+      if (processExited) {
+        if (processError) return Promise.reject(processError);
+        return Promise.resolve({ code: exitCode, fullOutput: stripAnsi(fullSessionOutput) });
+      }
+
+      if (!closePromise) {
+        closePromise = new Promise<InteractiveCLIResult>((resolve, reject) => {
+          closeResolve = resolve;
+          closeReject = reject;
+
+          const endTimer = setTimeout(() => {
+            // If processError happened, it would have been handled already.
+            // This timeout means the process is still running.
+            if (!processExited) {
+                const msg = `Timeout after ${timeoutMs}ms waiting for process to end. PID: ${child.pid}. Current output buffer: "${currentOutputBuffer}"`;
+                console.warn(msg); // Log a warning for better diagnostics
+                this.terminate(); // Attempt to kill the process on timeout
+                reject(new Error(msg));
+            }
+            // If it exited just before this timeout fired, the 'close' event handler would resolve/reject.
+          }, timeoutMs);
+          
+          // Ensure timer is cleared if process closes naturally
+          child.once('close', () => clearTimeout(endTimer)); 
+          child.once('error', () => clearTimeout(endTimer));
+        });
+      }
+      return closePromise;
+    },
+
+    terminate(): void {
+      if (!processExited && child.pid) {
+        try {
+          // Attempt to kill the entire process group by sending SIGTERM to -PID
+          // This is more robust for killing spawned shells or processes that create their own children.
+          process.kill(-child.pid, 'SIGTERM');
+        } catch (e: any) {
+          // Fallback if killing process group fails (e.g., not supported, or process already dead)
+          child.kill('SIGTERM');
+        }
+      }
+    },
   };
 }
