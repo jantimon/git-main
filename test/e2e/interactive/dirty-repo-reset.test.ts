@@ -36,7 +36,7 @@ test('interactive: dirty-repo-reset: git-main prompts to reset a dirty main bran
         for await (const prompt of cliSession) {
             console.log(`Received prompt: "${prompt.output.trim()}"`);
             assert.ok(
-                prompt.output.includes('Your main branch is dirty') && prompt.output.includes('reset it? [y/n]'),
+                prompt.output.includes('You are on main branch with uncommitted changes:') && prompt.output.includes('Revert all changes? [y/n]:'),
                 `Prompt should ask about resetting dirty branch. Got: "${prompt.output}"`
             );
             promptReceived = true;
