@@ -31,18 +31,14 @@ export async function setupTemporaryTestEnvironment(
 
   try {
     baseTempDir = await mkdtemp(join(tmpdir(), `git-main-e2e-${basename(testFileDirname)}-base-`));
-    console.log(`Base temporary directory created: ${baseTempDir}`);
 
     const localDir: string = join(baseTempDir, 'local');
     const remoteDir: string = join(baseTempDir, 'remote');
     await mkdir(localDir);
     await mkdir(remoteDir);
-    console.log(`Created local (${localDir}) and remote (${remoteDir}) subdirectories.`);
 
     const remoteRepoPath: string = join(remoteDir, 'upstream.git');
-    console.log(`Initializing bare remote repository at: ${remoteRepoPath}`);
     execSync(`git init --bare "${remoteRepoPath}"`, { cwd: baseTempDir, stdio: 'pipe', encoding: 'utf-8' });
-    console.log('Bare remote repository initialized.');
 
     const tempDir: string = localDir; // tempDir for the TestAPI refers to localDir
 
@@ -61,12 +57,9 @@ export async function setupTemporaryTestEnvironment(
     };
     
     execInTempDir('git init');
-    console.log('Local repository initialized.');
     execInTempDir('git config user.name "Test User"');
     execInTempDir('git config user.email "test@example.com"');
-    console.log('Git user configured in local repository.');
     execInTempDir('git checkout -b main');
-    console.log("Switched to 'main' branch in local repository.");
 
     const initialFixturesPath: string = join(testFileDirname, 'fixtures', 'initial');
     const fixtureFiles: string[] = await readdir(initialFixturesPath);
@@ -78,20 +71,15 @@ export async function setupTemporaryTestEnvironment(
         await copyFile(srcPath, destPath);
       }
     }
-    console.log('Initial fixture files copied to local repository.');
 
     execInTempDir('git add .');
     execInTempDir('git commit --allow-empty -m "Initial commit with fixtures"');
-    console.log('Initial commit made in local repository.');
 
     const relativeRemotePath: string = join('..', 'remote', 'upstream.git');
     execInTempDir(`git remote add origin "${relativeRemotePath}"`);
-    console.log("Remote 'origin' added to local repository.");
     execInTempDir('git push -u origin main');
-    console.log("'main' branch pushed to 'origin'.");
 
     const applyGitChangeLogic = async (fixtureDirPath: string, commitMessage: string): Promise<void> => {
-      console.log(`Applying git change from ${fixtureDirPath} to ${tempDir} with message "${commitMessage}"`);
       try {
         const changeFixtureFiles: string[] = await readdir(fixtureDirPath);
         for (const file of changeFixtureFiles) {
@@ -102,11 +90,8 @@ export async function setupTemporaryTestEnvironment(
             await copyFile(srcPath, destPath);
           }
         }
-        console.log('Files for git change copied.');
         execInTempDir('git add .');
-        console.log('Git add . executed for change.');
         execInTempDir(`git commit -m "${commitMessage}"`);
-        console.log(`Git commit executed for change with message: "${commitMessage}".`);
       } catch (error: any) {
         console.error(`Error in applyGitChangeLogic (fixture: ${fixtureDirPath}, message: "${commitMessage}"):`, error.message);
         throw error;
