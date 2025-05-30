@@ -1,4 +1,4 @@
-import { spawn, ChildProcess, SpawnOptions as NodeSpawnOptions } from 'child_process';
+import { spawn, type ChildProcess, type SpawnOptions as NodeSpawnOptions } from 'child_process';
 
 // Inline stripAnsi function
 const stripAnsi = (str: string): string => str.replace(/\[[0-9;]*[a-zA-Z]|[0-9;]*[a-zA-Z]/g, '');
