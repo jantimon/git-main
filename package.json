@@ -12,7 +12,7 @@
   "scripts": {
     "build": "rollup -c",
     "prepublishOnly": "npm run build",
-    "test:e2e": "node --test test/e2e/simple/*.test.js"
+    "test:e2e": "node --experimental-strip-types --test test/e2e/**/*.test.ts"
   },
   "keywords": [
     "git",
@@ -27,6 +27,7 @@
     "@rollup/plugin-commonjs": "^25.0.0",
     "@rollup/plugin-json": "^6.0.0",
     "@rollup/plugin-node-resolve": "^15.0.0",
+    "@types/node": "^22.15.24",
     "rollup": "^4.9.1",
     "zx": "^7.2.3"
   },
