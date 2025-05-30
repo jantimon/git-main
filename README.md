@@ -62,7 +62,8 @@ This project includes end-to-end (E2E) tests to ensure `git-main` behaves as exp
 
 To run the E2E tests locally:
 
-1.  Ensure you have Node.js installed (version 16 or higher).
+1.  Ensure you have Node.js installed. While the tool itself might run on older versions, the E2E tests specifically require Node.js 22.x.
+    Note: The E2E tests are configured to run on Node.js 22.x due to the use of the `--experimental-strip-types` flag.
 2.  Install dependencies:
     ```bash
     npm install

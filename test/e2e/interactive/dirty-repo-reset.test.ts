@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'assert';
 import { dirname, join as pathJoin } from 'path'; // Renamed join to pathJoin to avoid conflict
 import { fileURLToPath } from 'url';
-import *_fs from 'fs'; // Import fs for existsSync and writeFileSync
+import { writeFileSync, existsSync } from 'fs'; // Import fs for existsSync and writeFileSync
 import { setupTemporaryTestEnvironment } from '../test-utils.ts';
 import { createInteractiveCLI } from '../interactiveSpawn.ts';
 
@@ -19,7 +19,7 @@ test('interactive: dirty-repo-reset: git-main prompts to reset a dirty main bran
         // 1. Make the main branch dirty by creating an untracked file
         // setupTemporaryTestEnvironment ensures we have a repo, possibly with an initial empty commit.
         // The main branch should be checked out by default by setupTemporaryTestEnvironment.
-        _fs.writeFileSync(dirtyFilePath, 'This is a dirty file.', 'utf-8');
+        writeFileSync(dirtyFilePath, 'This is a dirty file.', 'utf-8');
         console.log('Created dirty-file.txt to make the repository dirty.');
 
         // 2. Verify it's dirty
@@ -59,7 +59,7 @@ test('interactive: dirty-repo-reset: git-main prompts to reset a dirty main bran
         console.log('Assertion passed: Git status is clean.');
 
         // Verify untracked file is gone
-        const dirtyFileExists = _fs.existsSync(dirtyFilePath);
+        const dirtyFileExists = existsSync(dirtyFilePath);
         assert.strictEqual(dirtyFileExists, false, 'Dirty file should have been removed by the reset.');
         console.log('Assertion passed: Dirty file is removed.');
         
