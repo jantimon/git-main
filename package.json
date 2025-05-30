@@ -12,7 +12,11 @@
   "scripts": {
     "build": "rollup -c",
     "prepublishOnly": "npm run build",
-    "test:e2e": "node --experimental-strip-types --test test/e2e/**/*.test.ts"
+    "pretest": "npm run build",
+    "test": "npm run test:version && npm run test:typecheck && npm run test:e2e",
+    "test:version": "node -e \"if ((Number(process.version.slice(1).split('.')[0]) >= 22) === false) { throw new Error('Node version must be 22.x.x'); }\"",
+    "test:e2e": "node --experimental-strip-types --test test/e2e/**/*.test.ts",
+    "test:typecheck": "tsc --noEmit"
   },
   "keywords": [
     "git",
@@ -29,6 +33,7 @@
     "@rollup/plugin-node-resolve": "^15.0.0",
     "@types/node": "^22.15.24",
     "rollup": "^4.9.1",
+    "typescript": "^5.8.3",
     "zx": "^7.2.3"
   },
   "engines": {

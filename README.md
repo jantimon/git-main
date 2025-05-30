@@ -72,9 +72,9 @@ To run the E2E tests locally:
     ```bash
     npm run build
     ```
-4.  Run the E2E tests:
+4.  Run the tests:
     ```bash
-    npm run test:e2e
+    npm run test
     ```
 
 The tests will execute `git-main` in temporary Git repositories to simulate real-world usage.

@@ -6,13 +6,19 @@ $.quiet = true;
 $.verbose = false;
 
 const log = {
+  /** @param {string} msg */
   info: (msg) => console.log(chalk.blue("ℹ"), msg),
+  /** @param {string} msg */
   success: (msg) => console.log(chalk.green("✓"), msg),
+  /** @param {string} msg */
   warning: (msg) => console.log(chalk.yellow("⚠"), msg),
+  /** @param {string} msg */
   error: (msg) => console.log(chalk.red("✖"), msg),
+  /** @param {string} msg */
   action: (msg) => console.log(chalk.cyan("→"), msg),
 };
 
+  /** @param {string} message */
 const confirmAction = async (message) => {
   let result = "";
   while (result !== "y" && result !== "n") {
@@ -140,7 +146,7 @@ async function canSafelyDeleteBranch(branchName, mainBranch = "master") {
   } catch (e) {
     return {
       safe: false,
-      reason: `Error checking branch: ${e.message}`,
+      reason: `Error checking branch: ${e instanceof Error ? e.message : e}`,
     };
   }
 }
@@ -156,7 +162,7 @@ async function main() {
     log.action("Fetching latest changes...");
     await $`git fetch`;
   } catch (e) {
-    if (e.message.includes("fatal: not a git repository")) {
+    if (e instanceof Error && e.message.includes("fatal: not a git repository")) {
       log.error("Not a git repository");
       process.exit(1);
     }
