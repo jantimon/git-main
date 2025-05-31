@@ -149,6 +149,226 @@ async function canSafelyDeleteBranch(branchName, mainBranch = "master") {
       reason: `Error checking branch: ${e instanceof Error ? e.message : e}`,
     };
   }
+// Placed escapeRegExp at a higher scope, accessible to buildGoneRegexPattern
+/** @param {string} string */
+const escapeRegExp = (string) => {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
+/**
+ * @param {string} branchNameRaw Raw branch name
+ * @param {string} remoteNameRaw Raw remote name
+ * @returns {string} Regex pattern string for RegExp constructor
+ */
+const buildGoneRegexPattern = (branchNameRaw, remoteNameRaw) => {
+    const bRawStr = String(branchNameRaw);
+    const rRawStr = String(remoteNameRaw);
+    const bEscaped = escapeRegExp(bRawStr);
+    const rEscaped = escapeRegExp(rRawStr);
+
+    // Using string concatenation for clarity with backslashes for RegExp
+    const corePattern = '\\[' + rEscaped + '/' + bEscaped + ':\\s*gone\\]';
+    const fullPattern = '^\\s*(\\*\\s+)?' + bEscaped + '.*?\\s*' + corePattern + '.*';
+    return fullPattern;
+};
+
+async function cleanupStaleBranches() {
+  log.action("Cleaning up stale branches...");
+
+  const branchesOutput = await $`git for-each-ref refs/heads/ --format='%(refname:short)'`;
+  const localBranches = branchesOutput.stdout.trim().split("\n").filter(Boolean);
+
+  if (localBranches.length === 0) {
+    log.info("No local branches found to clean up.");
+    return;
+  }
+
+  const staleBranches = [];
+  // Correctly calculate one month ago in UTC for reliable comparison
+  const now = new Date();
+  const oneMonthAgoDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  oneMonthAgoDate.setUTCMonth(oneMonthAgoDate.getUTCMonth() - 1);
+  const oneMonthAgoTimestamp = oneMonthAgoDate.getTime();
+
+  /** @param {string} string */
+  function escapeRegExp(string) { // Moved to higher scope for buildGoneRegexPattern
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * @param {string} branchNameRaw Raw branch name (unescaped)
+   * @param {string} remoteNameRaw Raw remote name (unescaped)
+   * @param {boolean} isDebugLogEnabled
+   * @returns {string} Regex pattern string
+   */
+  function buildGoneRegexPattern(branchNameRaw, remoteNameRaw, isDebugLogEnabled) {
+      const bRawStr = String(branchNameRaw);
+      const rRawStr = String(remoteNameRaw);
+
+      const bEscaped = escapeRegExp(bRawStr);
+      const rEscaped = escapeRegExp(rRawStr);
+
+      if (isDebugLogEnabled && branchNameRaw === 'stale-and-gone') { // Log char codes only for specific branch
+          let bc = ""; for(let i=0; i < bEscaped.length; i++) bc += bEscaped.charCodeAt(i) + " ";
+          let rc = ""; for(let i=0; i < rEscaped.length; i++) rc += rEscaped.charCodeAt(i) + " ";
+          log.info(`[DEBUG buildGoneRegexPattern] Escaped branch ('${bEscaped}') chars: ${bc.trim()}`);
+          log.info(`[DEBUG buildGoneRegexPattern] Escaped remote ('${rEscaped}') chars: ${rc.trim()}`);
+      }
+      // In a string for new RegExp, \s becomes whitespace char class, literal [ needs \[
+      // String concatenation is used to avoid issues with template literal processing of backslashes for RegExp.
+      const corePattern = '\\[' + rEscaped + '/' + bEscaped + ':\\s*gone\\]'; // \s* for regex engine
+      const fullPattern = '^\\s*(\\*\\s+)?' + bEscaped + '.*?\\s*' + corePattern + '.*'; // All \s become \s for regex engine
+
+      if (isDebugLogEnabled) {
+        log.info(`[DEBUG buildGoneRegexPattern] Constructed corePattern string: "${corePattern}"`);
+        log.info(`[DEBUG buildGoneRegexPattern] Constructed fullPattern string: "${fullPattern}"`);
+      }
+      return fullPattern;
+  }
+
+  const rawRemoteName = (await $`git remote show -n`.catch(() => ({ stdout: "" }))).stdout.trim() || "origin";
+  // Note: remoteName is now derived inside the loop if it needs to be branch-specific,
+  // or use this global rawRemoteName for buildGoneRegexPattern's remoteNameRaw argument.
+  // For now, assuming rawRemoteName is the one to use for all branches.
+
+  let branchVerboseOutput;
+  // Use mocked output ONLY if debug mode is active AND the env var is set
+  if (isTestDebugMode && process.env.TEST_MOCK_GIT_BRANCH_VV_OUTPUT) { // isTestDebugMode check remains for mock activation
+    branchVerboseOutput = process.env.TEST_MOCK_GIT_BRANCH_VV_OUTPUT;
+  } else {
+    branchVerboseOutput = (await $`git branch -vv`).stdout;
+  }
+
+  for (const branch of localBranches) {
+    // Skip main/master branch
+    if (branch === "main" || branch === "master") {
+      continue;
+    }
+
+    const lastCommitDateTimestamp = (await $`git log -1 --format=%ct ${branch}`).stdout.trim();
+    const lastCommitDate = new Date(parseInt(lastCommitDateTimestamp, 10) * 1000); // This is already UTC-based
+
+    const isOlderThanOneMonth = lastCommitDate.getTime() < oneMonthAgoTimestamp;
+
+    const escapedBranch = escapeRegExp(String(branch)); // Ensure branch is string then escape
+    const currentRemoteName = escapeRegExp(String(rawRemoteName)); // Ensure rawRemoteName is string then escape for this specific regex construction
+
+    const remoteGoneRegexPattern = buildGoneRegexPattern(branch, rawRemoteName, isTestDebugMode); // buildGoneRegexPattern uses String() and escapeRegExp internally
+    const remoteGoneRegex = new RegExp(remoteGoneRegexPattern, "m");
+    const isRemoteGone = remoteGoneRegex.test(branchVerboseOutput);
+
+    if (isTestDebugMode) {
+      log.info(`[DEBUG] Branch: "${branch}", OlderThan1M: ${isOlderThanOneMonth}, RemoteGone: ${isRemoteGone}`);
+
+      if (isOlderThanOneMonth && !isRemoteGone) {
+        log.info(`[DEBUG] ---- Analyzing mismatch for STALE (by date) branch: "${branch}" ----`);
+        log.info(`[DEBUG] Using Pattern (multiline): "${remoteGoneRegex.source}"`);
+        const lines = branchVerboseOutput.split('\n');
+        const relevantLine = lines.find(line => line.includes(branch));
+
+        if (relevantLine) {
+          const trimmedLine = relevantLine.trim();
+          log.info(`[DEBUG] Relevant trimmed line: ${JSON.stringify(trimmedLine)}`);
+
+          const lineSpecificPattern = buildGoneRegexPattern(branch, rawRemoteName, false); // isDebug=false for this call
+          const lineSpecificRegex = new RegExp(lineSpecificPattern);
+          log.info(`[DEBUG] Line-specific regex test (pattern: "${lineSpecificRegex.source}"): ${lineSpecificRegex.test(trimmedLine)}`);
+
+          // Only do super detailed char logging for 'stale-and-gone'
+          if (branch === 'stale-and-gone' && rawRemoteName === 'origin') {
+              const hardcodedPatternString = "\\[origin/stale-and-gone:\\s*gone\\]";
+              const hardcodedSimpleRegex = new RegExp(hardcodedPatternString);
+              log.info(`[DEBUG_SNG] Hardcoded Simple Regex source: ${hardcodedSimpleRegex.source}`);
+              const hardcodedMatchResult = hardcodedSimpleRegex.test(trimmedLine);
+              log.info(`[DEBUG_SNG] Hardcoded Simple Regex result: ${hardcodedMatchResult}`);
+
+              if (!hardcodedMatchResult) {
+                  log.info(`[DEBUG_SNG] HARDCODED SIMPLE FAILED. Chars for expected part:`);
+                  const targetStrInMock = "[origin/stale-and-gone: gone]";
+                  const indexInTrimmed = trimmedLine.indexOf(targetStrInMock);
+                  if (indexInTrimmed > -1) {
+                      const sub = trimmedLine.substring(indexInTrimmed, indexInTrimmed + targetStrInMock.length);
+                      let chars = ""; for (let k=0; k < sub.length; k++) { chars += sub.charCodeAt(k) + " "; }
+                      log.info(`[DEBUG_SNG] Actual substring ("${sub}") codes: ${chars.trim()}`);
+                  }
+                  let patternChars = ""; const expected = `[${rawRemoteName}/${branch}: gone]`;
+                  for (let k=0; k < expected.length; k++) { patternChars += expected.charCodeAt(k) + " "; }
+                  log.info(`[DEBUG_SNG] Expected pattern str ("${expected}") codes: ${patternChars.trim()}`);
+              }
+
+              const rRawStrCoerced = String(rawRemoteName);
+              const bRawStrCoerced = String(branch);
+              const rEscapedCoerced = escapeRegExp(rRawStrCoerced);
+              const bEscapedCoerced = escapeRegExp(bRawStrCoerced);
+              // Char codes for dynamic parts
+              let rcChars = ""; for(let i=0; i < rEscapedCoerced.length; i++) rcChars += rEscapedCoerced.charCodeAt(i) + " ";
+              log.info(`[DEBUG_SNG] Char codes for rEscapedCoerced ('${rEscapedCoerced}'): ${rcChars.trim()}`);
+              let bcChars = ""; for(let i=0; i < bEscapedCoerced.length; i++) bcChars += bEscapedCoerced.charCodeAt(i) + " ";
+              log.info(`[DEBUG_SNG] Char codes for bEscapedCoerced ('${bEscapedCoerced}'): ${bcChars.trim()}`);
+
+              const dynamicSimplePatternStr = '\\[' + rEscapedCoerced + '/' + bEscapedCoerced + ':\\s*gone\\]';
+              const dynamicSimpleRegex = new RegExp(dynamicSimplePatternStr);
+              log.info(`[DEBUG_SNG] Dynamic Simple Regex source: ${dynamicSimpleRegex.source}`);
+              log.info(`[DEBUG_SNG] Dynamic Simple Regex result: ${dynamicSimpleRegex.test(trimmedLine)}`);
+              if (!dynamicSimpleRegex.test(trimmedLine)) {
+                const directInclude = `[${rawRemoteName}/${branch}: gone]`;
+                log.info(`[DEBUG_SNG] Direct include check for "${directInclude}" in trimmedLine: ${trimmedLine.includes(directInclude)}`);
+              }
+          }
+        } else {
+          log.info(`[DEBUG] No relevant line found for branch "${branch}" for detailed analysis.`);
+        }
+        log.info(`[DEBUG] ---- End regex mismatch analysis for branch: "${branch}" ----`);
+      }
+    }
+
+    if (isOlderThanOneMonth && isRemoteGone) {
+      staleBranches.push(branch);
+    }
+  }
+
+  if (staleBranches.length === 0) {
+    log.info("No stale branches found matching the criteria.");
+    return;
+  }
+
+  let branchesToDelete = staleBranches;
+  if (staleBranches.length > 5) {
+    log.info(`Found ${staleBranches.length} stale branches. Randomly selecting 5 for deletion.`);
+    // Shuffle and pick 5
+    branchesToDelete = staleBranches.sort(() => 0.5 - Math.random()).slice(0, 5);
+  }
+
+  branchesToDelete.sort(); // Sort alphabetically
+
+  log.warning("The following stale branches are selected for deletion:");
+  branchesToDelete.forEach(branch => console.log(`  - ${chalk.bold(branch)}`));
+  console.log("");
+
+  const confirmed = await confirmAction(
+    `Do you want to delete these ${branchesToDelete.length} branches?`
+  );
+
+  if (confirmed) {
+    for (const branch of branchesToDelete) {
+      log.action(`Deleting branch ${chalk.bold(branch)}...`);
+      try {
+        await $`git branch -D ${branch}`;
+        log.success(`Branch ${chalk.bold(branch)} deleted.`);
+      } catch (e) {
+        if (e instanceof Error && 'stderr' in e) {
+          // @ts-ignore Property 'stderr' does exist on ProcessOutput
+          log.error(`Failed to delete branch ${chalk.bold(branch)}: ${e.stderr || e.message}`);
+        } else if (e instanceof Error) {
+          log.error(`Failed to delete branch ${chalk.bold(branch)}: ${e.message}`);
+        } else {
+          log.error(`Failed to delete branch ${chalk.bold(branch)}: ${String(e)}`);
+        }
+      }
+    }
+  } else {
+    log.info("Branch deletion cancelled.");
+  }
 }
 
 async function main() {
@@ -262,6 +482,9 @@ async function main() {
   } else {
     log.info("Skipping branch cleanup");
   }
+
+  // Clean up stale branches
+  await cleanupStaleBranches();
 
   if (hasLockfileChanges && packageManager) {
     await spinner(
