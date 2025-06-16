@@ -264,11 +264,48 @@ function displayStaleBranches(groupedBranches) {
 }
 
 async function main() {
+  // Argument validation - only allow single branch name argument
+  const args = process.argv.slice(2);
+  if (args.length > 1 || args?.[0]?.startsWith('-')) {
+    log.error("Usage: git-main [branch-name]");
+    process.exit(1);
+  }
+  
+  const explicitBranch = args.length === 1 ? args[0] : null;
   const defaultRemote = (await $`git remote show -n`).stdout.trim();
   if (!defaultRemote) {
     log.error("No remote repository found");
     process.exit(1);
   }
+
+  // Determine main branch - use explicit argument or detect main/master
+  let mainBranch;
+  if (explicitBranch) {
+    // Check if explicitly provided branch exists
+    try {
+      await $`git rev-parse --quiet --verify ${explicitBranch}`;
+      mainBranch = explicitBranch;
+    } catch {
+      // Branch doesn't exist, ask to create it
+      const shouldCreate = await confirmAction(`Branch '${explicitBranch}' does not exist. Create it?`);
+      if (shouldCreate) {
+        log.action(`Creating branch ${chalk.bold(explicitBranch)}...`);
+        await $`git checkout -b ${explicitBranch}`;
+        mainBranch = explicitBranch;
+      } else {
+        process.exit(1);
+      }
+    }
+  } else {
+    // Auto-detect main/master branch
+    mainBranch = "main";
+    try {
+      await $`git rev-parse --quiet --verify ${mainBranch}`;
+    } catch {
+      mainBranch = "master";
+    }
+  }
+  log.info(`Using main branch: ${chalk.bold(mainBranch)}`);
 
   try {
     log.action("Fetching latest changes...");
@@ -279,15 +316,6 @@ async function main() {
       process.exit(1);
     }
   }
-
-  // Detect main/master branch
-  let mainBranch = "main";
-  try {
-    await $`git rev-parse --quiet --verify ${mainBranch}`;
-  } catch {
-    mainBranch = "master";
-  }
-  log.info(`Using main branch: ${chalk.bold(mainBranch)}`);
 
   // Get git root and check package manager changes
   const gitRoot = (await $`git rev-parse --show-toplevel`).stdout.trim();
@@ -338,9 +366,18 @@ async function main() {
 
   // Pull changes
   log.action("Pulling latest changes...");
-  const pullResult = await $`git pull`;
-  if (pullResult.stdout.includes("Already up to date.")) {
-    log.info("Repository is already up to date");
+  try {
+    const pullResult = await $`git pull`;
+    if (pullResult.stdout.includes("Already up to date.")) {
+      log.info("Repository is already up to date");
+    }
+  } catch (e) {
+    // Handle case where custom branch has no upstream tracking
+    if (explicitBranch && e instanceof Error && e.message.includes("There is no tracking information")) {
+      log.info(`Branch '${mainBranch}' has no upstream tracking, skipping pull`);
+    } else {
+      throw e;
+    }
   }
 
   // Compare lockfile contents after pull
