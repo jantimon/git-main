@@ -147,11 +147,12 @@ function formatAge(ageInSeconds) {
 }
 
 /**
- * Finds branches with deleted remotes (stale branches)
+ * Finds branches with deleted remotes (stale branches) or branches older than 6 months
  * @param {string} mainBranch
  * @returns {Promise<StaleBranch[]>}
  */
 async function findStaleBranches(mainBranch) {
+  const SIX_MONTHS_IN_SECONDS = 6 * 30 * 24 * 60 * 60; // 6 months in seconds
   try {
     // Clean stale remote refs first
     await $`git remote prune origin`;
@@ -188,14 +189,17 @@ async function findStaleBranches(mainBranch) {
       // Skip branches that were never pushed (no remote tracking)
       if (!trackingInfo) continue;
 
-      // Check if remote is gone
-      if (trackingInfo.includes(": gone")) {
-        // Get branch age (last commit timestamp)
-        const ageOutput = await $`git log -1 --format=%ct ${branchName}`;
-        const lastCommitTime = parseInt(ageOutput.stdout.trim());
-        const currentTime = Math.floor(Date.now() / 1000);
-        const age = currentTime - lastCommitTime;
+      // Get branch age (last commit timestamp) for all branches with tracking
+      const ageOutput = await $`git log -1 --format=%ct ${branchName}`;
+      const lastCommitTime = parseInt(ageOutput.stdout.trim());
+      const currentTime = Math.floor(Date.now() / 1000);
+      const age = currentTime - lastCommitTime;
 
+      // Check if remote is gone OR branch is older than 6 months
+      const isRemoteGone = trackingInfo.includes(": gone");
+      const isVeryOld = age > SIX_MONTHS_IN_SECONDS;
+
+      if (isRemoteGone || isVeryOld) {
         // Count unpushed commits
         const cherryOutput = await $`git cherry ${mainBranch} ${branchName}`;
         const unpushedCommits = cherryOutput.stdout
