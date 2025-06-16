@@ -218,9 +218,6 @@ async function findStaleBranches(mainBranch) {
         continue;
       }
 
-      // Skip branches that were never pushed (no remote tracking)
-      if (!trackingInfo) continue;
-
       // Get branch age (last commit timestamp) for all branches with tracking
       const ageOutput = await $`git log -1 --format=%ct ${branchName}`;
       const lastCommitTime = parseInt(ageOutput.stdout.trim());
@@ -228,7 +225,7 @@ async function findStaleBranches(mainBranch) {
       const age = currentTime - lastCommitTime;
 
       // Check if remote is gone OR branch is older than 6 months
-      const isRemoteGone = trackingInfo.includes(": gone");
+      const isRemoteGone = trackingInfo && trackingInfo.includes(": gone");
       const isVeryOld = age > THREE_MONTHS_IN_SECONDS;
 
       if (isRemoteGone || isVeryOld) {
@@ -261,13 +258,20 @@ async function findStaleBranches(mainBranch) {
  * @returns {Object<string, StaleBranch[]>}
  */
 function groupAndLimitBranches(branches) {
-  const grouped = {
-    current: branches.filter((b) => b.category === "current").slice(0, 1),
-    old: branches.filter((b) => b.category === "old").slice(0, 2),
-    "very-old": branches.filter((b) => b.category === "very-old").slice(0, 2),
+  const currentBranches = branches.filter(
+    (b) => b.category === "current"
+  ).slice(0, 2);
+  const oldBranches = branches.filter(
+    (b) => b.category === "old"
+  ).slice(0, 3);
+  const veryOldBranches = branches.filter(
+    (b) => b.category === "very-old"
+  ).slice(0, Math.max(0, 5 - currentBranches.length - oldBranches.length));
+  return {
+    current: currentBranches,
+    old: oldBranches,
+    "very-old": veryOldBranches
   };
-
-  return grouped;
 }
 
 /**
@@ -481,7 +485,7 @@ async function main() {
               allBranches.length > 1 ? "es" : ""
             }? [Enter to pick individually]`
           );
-
+          choice = "NULL";
           while (choice !== "y" && choice !== "n" && choice !== "") {
             choice = await question(
               `Delete all? [${chalk.green("y")}/${chalk.red(
