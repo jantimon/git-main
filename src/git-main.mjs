@@ -152,7 +152,7 @@ function formatAge(ageInSeconds) {
  * @returns {Promise<StaleBranch[]>}
  */
 async function findStaleBranches(mainBranch) {
-  const SIX_MONTHS_IN_SECONDS = 6 * 30 * 24 * 60 * 60; // 6 months in seconds
+  const THREE_MONTHS_IN_SECONDS = 3 * 30 * 24 * 60 * 60; // 3 months in seconds
   /** @type {StaleBranch[]} */
   const staleBranches = [];
 
@@ -229,7 +229,7 @@ async function findStaleBranches(mainBranch) {
 
       // Check if remote is gone OR branch is older than 6 months
       const isRemoteGone = trackingInfo.includes(": gone");
-      const isVeryOld = age > SIX_MONTHS_IN_SECONDS;
+      const isVeryOld = age > THREE_MONTHS_IN_SECONDS;
 
       if (isRemoteGone || isVeryOld) {
         // Count unpushed commits
