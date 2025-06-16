@@ -153,6 +153,39 @@ function formatAge(ageInSeconds) {
  */
 async function findStaleBranches(mainBranch) {
   const SIX_MONTHS_IN_SECONDS = 6 * 30 * 24 * 60 * 60; // 6 months in seconds
+  /** @type {StaleBranch[]} */
+  const staleBranches = [];
+
+  // Find and delete branches that are already merged into main
+  const branchList = (await $`git for-each-ref refs/heads/ "--format=%(refname:short)"`).stdout.trim().split('\n');
+  for (const branch of branchList) {
+    if (branch === mainBranch) continue;
+    
+    try {
+      // Find merge base between main and the branch
+      const mergeBase = (await $`git merge-base ${mainBranch} ${branch}`).stdout.trim();
+      
+      // Create a commit object with the branch's tree but using merge base as parent
+      const treeish = (await $`git rev-parse ${branch}^{tree}`).stdout.trim();
+      const commitId = (await $`git commit-tree ${treeish} -p ${mergeBase} -m _`).stdout.trim();
+      
+      // Check if this commit is already in main branch (meaning branch is merged)
+      const cherryResult = (await $`git cherry ${mainBranch} ${commitId}`).stdout.trim();
+      
+      if (cherryResult.startsWith('-')) {
+        // Branch is already merged, delete it
+        staleBranches.push({
+          name: branch,
+          age: 0, // Age is not relevant for merged branches
+          unpushedCommits: 0, // No unpushed commits since it's merged
+          category: 'current', // Treat merged branches as current 
+        });
+      }
+    } catch (e) {
+      // Skip branches that cause errors
+    }
+  }
+
   try {
     // Clean stale remote refs first
     await $`git remote prune origin`;
@@ -161,7 +194,6 @@ async function findStaleBranches(mainBranch) {
     const branchOutput = (await $`git branch -vv`).stdout;
     const branches = branchOutput.split("\n").filter(Boolean);
 
-    const staleBranches = [];
     const currentBranch = (
       await $`git rev-parse --abbrev-ref HEAD`
     ).stdout.trim();
@@ -214,7 +246,6 @@ async function findStaleBranches(mainBranch) {
         });
       }
     }
-
     return staleBranches;
   } catch (e) {
     log.error(
@@ -425,43 +456,9 @@ async function main() {
     // Auto-cleanup stale branches with deleted remotes
     log.action("🔍 Scanning for stale branches...");
 
-    let deletedMergedBranches = 0;
-    // Find and delete branches that are already merged into main
-    const branchList = (await $`git for-each-ref refs/heads/ "--format=%(refname:short)"`).stdout.trim().split('\n');
-    for (const branch of branchList) {
-      if (branch === mainBranch || branch === currentBranch) continue;
-      
-      try {
-        // Find merge base between main and the branch
-        const mergeBase = (await $`git merge-base ${mainBranch} ${branch}`).stdout.trim();
-        
-        // Create a commit object with the branch's tree but using merge base as parent
-        const treeish = (await $`git rev-parse ${branch}^{tree}`).stdout.trim();
-        const commitId = (await $`git commit-tree ${treeish} -p ${mergeBase} -m _`).stdout.trim();
-        
-        // Check if this commit is already in main branch (meaning branch is merged)
-        const cherryResult = (await $`git cherry ${mainBranch} ${commitId}`).stdout.trim();
-        
-        if (cherryResult.startsWith('-')) {
-          // Branch is already merged, delete it
-          log.info(`Deleting fully merged branch ${chalk.bold(branch)}`);
-          await $`git branch -D ${branch}`;
-          deletedMergedBranches++;
-        }
-      } catch (e) {
-        // Skip branches that cause errors
-      }
-    }
-
     const staleBranches = await findStaleBranches(mainBranch);
 
-    if (deletedMergedBranches > 0 && staleBranches.length === 0) {
-      log.success(
-        `Deleted ${deletedMergedBranches} fully merged branch${
-          deletedMergedBranches > 1 ? "es" : ""
-        }`
-      );
-    } else if (staleBranches.length === 0) {
+    if (staleBranches.length === 0) {
       log.info("No stale branches found");
     } else {
       console.log(
