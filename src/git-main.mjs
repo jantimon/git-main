@@ -112,14 +112,15 @@ async function readFileIfExists(filepath) {
 /**
  * Finds branches with deleted remotes (remote tracking branches that are gone)
  * @param {string} mainBranch
+ * @param {string} defaultRemote
  * @returns {Promise<string[]>}
  */
-async function findBranchesWithDeletedRemotes(mainBranch) {
+async function findBranchesWithDeletedRemotes(mainBranch, defaultRemote) {
   const branchesToDelete = [];
 
   try {
     // Clean stale remote refs first
-    await $`git remote prune origin`;
+    await $`git remote prune ${defaultRemote}`;
 
     // Get branches with remote tracking info
     const branchOutput = (await $`git branch -vv`).stdout;
@@ -191,10 +192,10 @@ async function main() {
     } catch {
       // Branch doesn't exist locally, check if it exists on remote
       try {
-        await $`git ls-remote --exit-code origin ${explicitBranch}`;
+        await $`git ls-remote --exit-code ${defaultRemote} ${explicitBranch}`;
         // Branch exists on remote, checkout and track it
         log.action(`Checking out remote branch ${chalk.bold(explicitBranch)}...`);
-        await $`git checkout -b ${explicitBranch} origin/${explicitBranch}`;
+        await $`git checkout -b ${explicitBranch} ${defaultRemote}/${explicitBranch}`;
         mainBranch = explicitBranch;
       } catch {
         // Branch doesn't exist locally or on remote, ask to create it
@@ -314,7 +315,7 @@ async function main() {
     // Auto-cleanup branches with deleted remotes
     log.action("Cleaning up branches with deleted remotes...");
 
-    const branchesToDelete = await findBranchesWithDeletedRemotes(mainBranch);
+    const branchesToDelete = await findBranchesWithDeletedRemotes(mainBranch, defaultRemote);
 
     if (branchesToDelete.length === 0) {
       log.info("No branches with deleted remotes found");
