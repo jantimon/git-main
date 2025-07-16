@@ -1,11 +1,11 @@
 # git-main
 
-> Switch to main branch, clean up merged branches, and handle dependencies - all in one command
+> Switch to main branch, clean up branches with deleted remotes, and handle dependencies - all in one command
 
 ## Features
 
 - 🔄 Auto-detects and switches to main/master branch
-- 🧹 Cleans up fully merged branches
+- 🧹 Cleans up branches with deleted remotes
 - 🚦 Handles dirty working directory gracefully
 - 📦 Auto-updates dependencies if lockfile changed
 - 🎯 Supports yarn, pnpm, and npm
@@ -30,7 +30,7 @@ Simply run `git-main` in any git repository. The tool will:
 1. Switch to your main branch (auto-detects main/master)
 2. Clean up your working directory if needed
 3. Pull latest changes
-4. Remove fully merged branches
+4. Remove branches with deleted remotes
 5. Update dependencies if lockfile changed (supports yarn, pnpm, and npm)
 
 ### Package Manager Support
@@ -47,9 +47,10 @@ $ git-main
 ℹ Using main branch: main
 → Fetching latest changes...
 → Pulling latest changes...
-→ Cleaning up merged branches...
-ℹ Deleting branch feature/123 (Branch is fully merged)
-ℹ Deleting branch fix/456 (Branch content matches current main)
+→ Cleaning up branches with deleted remotes...
+ℹ Deleting branch feature/123 (remote deleted)
+ℹ Deleting branch fix/456 (remote deleted)
+✓ Deleted 2 branches with deleted remotes
 → Installing dependencies with pnpm...
 ✓ All done! 🎉
 ```

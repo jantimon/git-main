@@ -108,83 +108,14 @@ async function readFileIfExists(filepath) {
   }
 }
 
-/**
- * @typedef StaleBranch
- * @property {string} name - Branch name
- * @property {number} age - Age in seconds
- * @property {number} unpushedCommits - Number of unpushed commits
- * @property {'current' | 'old' | 'very-old'} category - Age category
- */
 
 /**
- * Gets the age category for a branch based on its age in seconds
- * @param {number} ageInSeconds
- * @returns {'current' | 'old' | 'very-old'}
- */
-function getAgeCategory(ageInSeconds) {
-  const days = ageInSeconds / (24 * 60 * 60);
-  if (days < 7) return "current";
-  if (days < 28) return "old";
-  return "very-old";
-}
-
-/**
- * Formats age in a human-readable way
- * @param {number} ageInSeconds
- * @returns {string}
- */
-function formatAge(ageInSeconds) {
-  const hours = Math.floor(ageInSeconds / (60 * 60));
-  const days = Math.floor(ageInSeconds / (24 * 60 * 60));
-  const weeks = Math.floor(days / 7);
-  const months = Math.floor(days / 30);
-
-  if (months > 0) return `${months} month${months > 1 ? "s" : ""} ago`;
-  if (weeks > 0) return `${weeks} week${weeks > 1 ? "s" : ""} ago`;
-  if (days > 0) return `${days} day${days > 1 ? "s" : ""} ago`;
-  if (hours > 0) return `${hours} hour${hours > 1 ? "s" : ""} ago`;
-  return "less than 1 hour ago";
-}
-
-/**
- * Finds branches with deleted remotes (stale branches) or branches older than 6 months
+ * Finds branches with deleted remotes (remote tracking branches that are gone)
  * @param {string} mainBranch
- * @returns {Promise<StaleBranch[]>}
+ * @returns {Promise<string[]>}
  */
-async function findStaleBranches(mainBranch) {
-  const THREE_MONTHS_IN_SECONDS = 3 * 30 * 24 * 60 * 60; // 3 months in seconds
-  /** @type {StaleBranch[]} */
-  const staleBranches = [];
-
-  // Find and delete branches that are already merged into main
-  const branchList = (await $`git for-each-ref refs/heads/ "--format=%(refname:short)"`).stdout.trim().split('\n');
-  for (const branch of branchList) {
-    if (branch === mainBranch) continue;
-    
-    try {
-      // Find merge base between main and the branch
-      const mergeBase = (await $`git merge-base ${mainBranch} ${branch}`).stdout.trim();
-      
-      // Create a commit object with the branch's tree but using merge base as parent
-      const treeish = (await $`git rev-parse ${branch}^{tree}`).stdout.trim();
-      const commitId = (await $`git commit-tree ${treeish} -p ${mergeBase} -m _`).stdout.trim();
-      
-      // Check if this commit is already in main branch (meaning branch is merged)
-      const cherryResult = (await $`git cherry ${mainBranch} ${commitId}`).stdout.trim();
-      
-      if (cherryResult.startsWith('-')) {
-        // Branch is already merged, delete it
-        staleBranches.push({
-          name: branch,
-          age: 0, // Age is not relevant for merged branches
-          unpushedCommits: 0, // No unpushed commits since it's merged
-          category: 'current', // Treat merged branches as current 
-        });
-      }
-    } catch (e) {
-      // Skip branches that cause errors
-    }
-  }
+async function findBranchesWithDeletedRemotes(mainBranch) {
+  const branchesToDelete = [];
 
   try {
     // Clean stale remote refs first
@@ -218,108 +149,22 @@ async function findStaleBranches(mainBranch) {
         continue;
       }
 
-      // Get branch age (last commit timestamp) for all branches with tracking
-      const ageOutput = await $`git log -1 --format=%ct ${branchName}`;
-      const lastCommitTime = parseInt(ageOutput.stdout.trim());
-      const currentTime = Math.floor(Date.now() / 1000);
-      const age = currentTime - lastCommitTime;
-
-      // Check if remote is gone OR branch is older than 6 months
+      // Check if remote is gone
       const isRemoteGone = trackingInfo && trackingInfo.includes(": gone");
-      const isVeryOld = age > THREE_MONTHS_IN_SECONDS;
 
-      if (isRemoteGone || isVeryOld) {
-        // Count unpushed commits
-        const cherryOutput = await $`git cherry ${mainBranch} ${branchName}`;
-        const unpushedCommits = cherryOutput.stdout
-          .split("\n")
-          .filter((line) => line.startsWith("+")).length;
-
-        staleBranches.push({
-          name: branchName,
-          age,
-          unpushedCommits,
-          category: getAgeCategory(age),
-        });
+      if (isRemoteGone) {
+        branchesToDelete.push(branchName);
       }
     }
-    return staleBranches;
+    return branchesToDelete;
   } catch (e) {
     log.error(
-      `Error finding stale branches: ${e instanceof Error ? e.message : e}`
+      `Error finding branches with deleted remotes: ${e instanceof Error ? e.message : e}`
     );
     return [];
   }
 }
 
-/**
- * Groups stale branches by category with smart limiting
- * @param {StaleBranch[]} branches
- * @returns {Object<string, StaleBranch[]>}
- */
-function groupAndLimitBranches(branches) {
-  const currentBranches = branches.filter(
-    (b) => b.category === "current"
-  ).slice(0, 2);
-  const oldBranches = branches.filter(
-    (b) => b.category === "old"
-  ).slice(0, 3);
-  const veryOldBranches = branches.filter(
-    (b) => b.category === "very-old"
-  ).slice(0, Math.max(0, 5 - currentBranches.length - oldBranches.length));
-  return {
-    current: currentBranches,
-    old: oldBranches,
-    "very-old": veryOldBranches
-  };
-}
-
-/**
- * Displays categorized branches for cleanup
- * @param {Object<string, StaleBranch[]>} groupedBranches
- * @returns {StaleBranch[]} All branches to potentially delete
- */
-function displayStaleBranches(groupedBranches) {
-  const allBranches = [];
-  const categoryTitles = {
-    current: "CURRENT (< 1 week)",
-    old: "OLD (1-4 weeks)",
-    "very-old": "VERY OLD (> 1 month)",
-  };
-
-  const hasMultipleCategories =
-    Object.values(groupedBranches).filter((arr) => arr.length > 0).length > 1;
-
-  for (const [category, branches] of Object.entries(groupedBranches)) {
-    if (branches.length === 0) continue;
-
-    if (hasMultipleCategories) {
-      const title =
-        categoryTitles[/** @type {keyof typeof categoryTitles} */ (category)];
-      console.log(chalk.bold(title) + ":");
-    }
-
-    for (const branch of branches) {
-      const unpushedInfo =
-        branch.unpushedCommits > 0
-          ? `, has ${branch.unpushedCommits} unpushed commit${
-              branch.unpushedCommits > 1 ? "s" : ""
-            }`
-          : "";
-
-      console.log(
-        `→ ${chalk.yellow(branch.name)} (${formatAge(
-          branch.age
-        )}) - remote deleted${unpushedInfo}`
-      );
-      allBranches.push(branch);
-    }
-
-    if (hasMultipleCategories) console.log("");
-  }
-
-  return allBranches;
-}
 
 async function main() {
   // Argument validation - only allow single branch name argument
@@ -339,21 +184,30 @@ async function main() {
   // Determine main branch - use explicit argument or detect main/master
   let mainBranch;
   if (explicitBranch) {
-    // Check if explicitly provided branch exists
+    // Check if explicitly provided branch exists locally
     try {
       await $`git rev-parse --quiet --verify ${explicitBranch}`;
       mainBranch = explicitBranch;
     } catch {
-      // Branch doesn't exist, ask to create it
-      const shouldCreate = await confirmAction(
-        `Branch '${explicitBranch}' does not exist. Create it?`
-      );
-      if (shouldCreate) {
-        log.action(`Creating branch ${chalk.bold(explicitBranch)}...`);
-        await $`git checkout -b ${explicitBranch}`;
+      // Branch doesn't exist locally, check if it exists on remote
+      try {
+        await $`git ls-remote --exit-code origin ${explicitBranch}`;
+        // Branch exists on remote, checkout and track it
+        log.action(`Checking out remote branch ${chalk.bold(explicitBranch)}...`);
+        await $`git checkout -b ${explicitBranch} origin/${explicitBranch}`;
         mainBranch = explicitBranch;
-      } else {
-        process.exit(1);
+      } catch {
+        // Branch doesn't exist locally or on remote, ask to create it
+        const shouldCreate = await confirmAction(
+          `Branch '${explicitBranch}' does not exist locally or on remote. Create it?`
+        );
+        if (shouldCreate) {
+          log.action(`Creating branch ${chalk.bold(explicitBranch)}...`);
+          await $`git checkout -b ${explicitBranch}`;
+          mainBranch = explicitBranch;
+        } else {
+          process.exit(1);
+        }
       }
     }
   } else {
@@ -457,79 +311,24 @@ async function main() {
   }
 
   if (mainBranch === "master" || mainBranch === "main") {
-    // Auto-cleanup stale branches with deleted remotes
-    log.action("🔍 Scanning for stale branches...");
+    // Auto-cleanup branches with deleted remotes
+    log.action("Cleaning up branches with deleted remotes...");
 
-    const staleBranches = await findStaleBranches(mainBranch);
+    const branchesToDelete = await findBranchesWithDeletedRemotes(mainBranch);
 
-    if (staleBranches.length === 0) {
-      log.info("No stale branches found");
+    if (branchesToDelete.length === 0) {
+      log.info("No branches with deleted remotes found");
     } else {
-      console.log(
-        `Found ${staleBranches.length} branch${
-          staleBranches.length > 1 ? "es" : ""
-        } to clean up:`
-      );
-
-      const groupedBranches = groupAndLimitBranches(staleBranches);
-      const allBranches = displayStaleBranches(groupedBranches);
-
-      if (allBranches.length > 0) {
-        let choice = "";
-
-        // Bulk delete prompt
-        if (allBranches.length > 1) {
-          console.log("");
-          console.log(
-            `Delete all ${allBranches.length} stale branch${
-              allBranches.length > 1 ? "es" : ""
-            }? [Enter to pick individually]`
-          );
-          choice = "NULL";
-          while (choice !== "y" && choice !== "n" && choice !== "") {
-            choice = await question(
-              `Delete all? [${chalk.green("y")}/${chalk.red(
-                "n"
-              )}/${chalk.yellow("Enter")}]: `
-            );
-          }
-        }
-
-        if (choice === "y") {
-          // Bulk delete all branches
-          for (const branch of allBranches) {
-            log.info(`Deleting branch ${chalk.bold(branch.name)}`);
-            await $`git branch -D ${branch.name}`;
-          }
-          log.success(
-            `Deleted ${allBranches.length} stale branch${
-              allBranches.length > 1 ? "es" : ""
-            }`
-          );
-        } else if (choice === "") {
-          // Individual review mode
-          console.log("");
-          for (const branch of allBranches) {
-            const unpushedInfo =
-              branch.unpushedCommits > 0
-                ? ` (${branch.unpushedCommits} unpushed commit${
-                    branch.unpushedCommits > 1 ? "s" : ""
-                  })`
-                : "";
-
-            const shouldDelete = await confirmAction(
-              `Delete ${chalk.bold(branch.name)} (${formatAge(
-                branch.age
-              )})${unpushedInfo}?`
-            );
-
-            if (shouldDelete) {
-              log.info(`Deleting branch ${chalk.bold(branch.name)}`);
-              await $`git branch -D ${branch.name}`;
-            }
-          }
-        }
+      // Automatically delete branches with deleted remotes
+      for (const branchName of branchesToDelete) {
+        log.info(`Deleting branch ${chalk.bold(branchName)} (remote deleted)`);
+        await $`git branch -D ${branchName}`;
       }
+      log.success(
+        `Deleted ${branchesToDelete.length} branch${
+          branchesToDelete.length > 1 ? "es" : ""
+        } with deleted remotes`
+      );
     }
   }
 
