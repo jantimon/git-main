@@ -196,7 +196,7 @@ async function main() {
 
   /** @type {string|null} */
   let createNewBranch = null;
-  /** @type {boolean} */
+  /** @type {boolean} whether the branch exists on remote */
   let isRemoteBranch = false;
   if (explicitBranch) {
     // Check if explicitly provided branch exists locally
@@ -280,15 +280,24 @@ async function main() {
 
   const originalLockfileContent = await getLockfileContent(gitRoot);
 
-  // Only switch to main and pull if we're not creating a new branch on dirty state
+  // Only pull on main if we're not creating a new branch on dirty state
   if (!(createNewBranch && status)) {
     // Switch to main branch if needed
     if (currentBranch !== mainBranch) {
-      log.action(`Switching to ${chalk.bold(mainBranch)} branch...`);
+      // If the branch exist on remote but not locally, create it
       if (isRemoteBranch) {
+        log.action(`Switching to remote branch ${chalk.bold(mainBranch)}...`);
         await $`git checkout -b ${mainBranch} ${defaultRemote}/${mainBranch}`;
-      } else {
+      } 
+      // If we are not going to create a new branch, checkout the main branch
+      // that allows branching of another branch
+      else if (!createNewBranch) {
+      log.action(`Switching to ${chalk.bold(mainBranch)} branch...`);
         await $`git checkout ${mainBranch}`;
+      } else {
+        log.info(
+          `Branching off from ${chalk.bold(currentBranch)} branch`
+        );
       }
     }
 

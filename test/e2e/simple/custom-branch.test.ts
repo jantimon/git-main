@@ -166,3 +166,40 @@ test('custom-branch: git-main exits when user declines to create new branch', as
         assert.strictEqual(finalBranches, '', 'Branch should not have been created');
     });
 });
+
+test('custom-branch: git-main creates new branch from non-main branch', async () => {
+    await setupTemporaryTestEnvironment(__dirname, async (testAPI) => {
+        // Create a feature branch and switch to it
+        testAPI.exec('git checkout -b feature/parent-branch');
+        testAPI.exec('echo "parent branch content" > parent.txt');
+        testAPI.exec('git add parent.txt');
+        testAPI.exec('git commit -m "Add parent branch content"');
+        
+        // Verify we're on the parent branch
+        const currentBranch = testAPI.exec('git rev-parse --abbrev-ref HEAD').trim();
+        assert.strictEqual(currentBranch, 'feature/parent-branch', 'Should be on parent branch');
+        
+        // Use interactive test to create new branch from current branch
+        const run = testAPI.execInteractive(`node ${testAPI.gitMainScript} feature/child-branch`);
+        await run.waitForText("Branch 'feature/child-branch' does not exist locally or on remote. Create it?", 5000);
+        run.respond('y');
+        await run.waitForEnd(10000);
+        
+        // Verify we're on the new child branch
+        const newBranch = testAPI.exec('git rev-parse --abbrev-ref HEAD').trim();
+        assert.strictEqual(newBranch, 'feature/child-branch', 'Should be on child branch');
+        
+        // Verify the child branch was created from the parent branch (not main)
+        const parentCommit = testAPI.exec('git rev-parse feature/parent-branch').trim();
+        const childCommit = testAPI.exec('git rev-parse feature/child-branch').trim();
+        assert.strictEqual(parentCommit, childCommit, 'Child branch should be created from parent branch');
+        
+        // Verify parent branch content exists in child branch
+        const parentContent = testAPI.exec('cat parent.txt').trim();
+        assert.strictEqual(parentContent, 'parent branch content', 'Should have parent branch content');
+        
+        // Verify child branch has the parent branch's commit but not main's latest commit
+        const mainCommit = testAPI.exec('git rev-parse main').trim();
+        assert.notStrictEqual(childCommit, mainCommit, 'Child branch should not be created from main');
+    });
+});
