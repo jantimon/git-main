@@ -184,6 +184,20 @@ async function main() {
 
   // Determine main branch - use explicit argument or detect main/master
   let mainBranch;
+
+  // Auto-detect main/master branch
+  mainBranch = "main";
+  try {
+    await $`git rev-parse --quiet --verify ${mainBranch}`;
+  } catch {
+    mainBranch = "master";
+  }
+  log.info(`Using main branch: ${chalk.bold(mainBranch)}`);
+
+  /** @type {string|null} */
+  let createNewBranch = null;
+  /** @type {boolean} */
+  let isRemoteBranch = false;
   if (explicitBranch) {
     // Check if explicitly provided branch exists locally
     try {
@@ -193,34 +207,21 @@ async function main() {
       // Branch doesn't exist locally, check if it exists on remote
       try {
         await $`git ls-remote --exit-code ${defaultRemote} ${explicitBranch}`;
-        // Branch exists on remote, checkout and track it
-        log.action(`Checking out remote branch ${chalk.bold(explicitBranch)}...`);
-        await $`git checkout -b ${explicitBranch} ${defaultRemote}/${explicitBranch}`;
+        // Branch exists on remote, will checkout and track it later
         mainBranch = explicitBranch;
+        isRemoteBranch = true;
       } catch {
         // Branch doesn't exist locally or on remote, ask to create it
         const shouldCreate = await confirmAction(
           `Branch '${explicitBranch}' does not exist locally or on remote. Create it?`
         );
-        if (shouldCreate) {
-          log.action(`Creating branch ${chalk.bold(explicitBranch)}...`);
-          await $`git checkout -b ${explicitBranch}`;
-          mainBranch = explicitBranch;
-        } else {
+        if (!shouldCreate) {
           process.exit(1);
         }
+        createNewBranch = explicitBranch;
       }
     }
-  } else {
-    // Auto-detect main/master branch
-    mainBranch = "main";
-    try {
-      await $`git rev-parse --quiet --verify ${mainBranch}`;
-    } catch {
-      mainBranch = "master";
-    }
   }
-  log.info(`Using main branch: ${chalk.bold(mainBranch)}`);
 
   try {
     log.action("Fetching latest changes...");
@@ -245,7 +246,10 @@ async function main() {
 
   const status = (await $`git status --porcelain`).stdout;
   if (status) {
-    if (currentBranch === mainBranch) {
+    // When creating a new branch, allow dirty state - we'll create the branch with uncommitted changes
+    if (createNewBranch) {
+      log.info("Creating new branch with uncommitted changes");
+    } else if (currentBranch === mainBranch) {
       console.log("");
       log.warning(
         `You are on ${chalk.bold(
@@ -276,31 +280,38 @@ async function main() {
 
   const originalLockfileContent = await getLockfileContent(gitRoot);
 
-  // Switch to main branch if needed
-  if (currentBranch !== mainBranch) {
-    log.action(`Switching to ${chalk.bold(mainBranch)} branch...`);
-    await $`git checkout ${mainBranch}`;
-  }
-
-  // Pull changes
-  log.action("Pulling latest changes...");
-  try {
-    const pullResult = await $`git pull`;
-    if (pullResult.stdout.includes("Already up to date.")) {
-      log.info("Repository is already up to date");
+  // Only switch to main and pull if we're not creating a new branch on dirty state
+  if (!(createNewBranch && status)) {
+    // Switch to main branch if needed
+    if (currentBranch !== mainBranch) {
+      log.action(`Switching to ${chalk.bold(mainBranch)} branch...`);
+      if (isRemoteBranch) {
+        await $`git checkout -b ${mainBranch} ${defaultRemote}/${mainBranch}`;
+      } else {
+        await $`git checkout ${mainBranch}`;
+      }
     }
-  } catch (e) {
-    // Handle case where custom branch has no upstream tracking
-    if (
-      explicitBranch &&
-      e instanceof Error &&
-      e.message.includes("There is no tracking information")
-    ) {
-      log.info(
-        `Branch '${mainBranch}' has no upstream tracking, skipping pull`
-      );
-    } else {
-      throw e;
+
+    // Pull changes
+    log.action("Pulling latest changes...");
+    try {
+      const pullResult = await $`git pull`;
+      if (pullResult.stdout.includes("Already up to date.")) {
+        log.info("Repository is already up to date");
+      }
+    } catch (e) {
+      // Handle case where custom branch has no upstream tracking
+      if (
+        explicitBranch &&
+        e instanceof Error &&
+        e.message.includes("There is no tracking information")
+      ) {
+        log.info(
+          `Branch '${mainBranch}' has no upstream tracking, skipping pull`
+        );
+      } else {
+        throw e;
+      }
     }
   }
 
@@ -309,6 +320,12 @@ async function main() {
   if (packageManager) {
     const newLockfileContent = await getLockfileContent(gitRoot);
     hasLockfileChanges = originalLockfileContent !== newLockfileContent;
+  }
+
+  // Create branch if needed (after pulling latest changes)
+  if (createNewBranch) {
+    log.action(`Creating branch ${chalk.bold(createNewBranch)}...`);
+    await $`git checkout -b ${createNewBranch}`;
   }
 
   if (mainBranch === "master" || mainBranch === "main") {

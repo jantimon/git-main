@@ -56,10 +56,7 @@ test('custom-branch: git-main checks out remote branch when it exists on remote 
         assert(remoteBranches.includes('origin/feature/remote-only'), 'Branch should exist on remote');
         
         // Run git-main with the remote branch name
-        const output = testAPI.exec(`node ${testAPI.gitMainScript} feature/remote-only`);
-        
-        // Verify it mentions checking out remote branch
-        assert(output.includes('Checking out remote branch feature/remote-only'), 'Should mention checking out remote branch');
+        testAPI.exec(`node ${testAPI.gitMainScript} feature/remote-only`);
         
         // Verify we're on the remote branch
         const currentBranch = testAPI.exec('git rev-parse --abbrev-ref HEAD').trim();
@@ -72,5 +69,100 @@ test('custom-branch: git-main checks out remote branch when it exists on remote 
         // Verify remote content exists
         const remoteContent = testAPI.exec('cat remote.txt').trim();
         assert.strictEqual(remoteContent, 'remote content', 'Should have remote branch content');
+    });
+});
+
+test('custom-branch: git-main creates new branch when it does not exist and user confirms', async () => {
+    await setupTemporaryTestEnvironment(__dirname, async (testAPI) => {
+        // Verify the branch doesn't exist locally
+        const localBranches = testAPI.exec('git branch --list feature/new-branch').trim();
+        assert.strictEqual(localBranches, '', 'Branch should not exist locally');
+        
+        // Verify the branch doesn't exist on remote
+        try {
+            testAPI.exec('git ls-remote --exit-code origin feature/new-branch');
+            assert.fail('Branch should not exist on remote');
+        } catch (error) {
+            // Expected - branch should not exist on remote
+        }
+        
+        // Use interactive test to confirm branch creation
+        const run = testAPI.execInteractive(`node ${testAPI.gitMainScript} feature/new-branch`);
+        await run.waitForText("Branch 'feature/new-branch' does not exist locally or on remote. Create it?", 5000);
+        run.respond('y');
+        await run.waitForEnd(10000);
+        
+        // Verify we're on the new branch
+        const currentBranch = testAPI.exec('git rev-parse --abbrev-ref HEAD').trim();
+        assert.strictEqual(currentBranch, 'feature/new-branch', 'Should be on feature/new-branch branch');
+        
+        // Verify the branch was created from the latest main
+        const mainCommit = testAPI.exec('git rev-parse main').trim();
+        const newBranchCommit = testAPI.exec('git rev-parse feature/new-branch').trim();
+        assert.strictEqual(mainCommit, newBranchCommit, 'New branch should be created from latest main');
+    });
+});
+
+test('custom-branch: git-main creates new branch with dirty working directory', async () => {
+    await setupTemporaryTestEnvironment(__dirname, async (testAPI) => {
+        // Create some uncommitted changes
+        testAPI.exec('echo "uncommitted content" > uncommitted.txt');
+        testAPI.exec('git add uncommitted.txt');
+        testAPI.exec('echo "modified content" >> main.txt');
+        
+        // Verify we have uncommitted changes
+        const status = testAPI.exec('git status --porcelain').trim();
+        assert(status.length > 0, 'Should have uncommitted changes');
+        
+        // Use interactive test to confirm branch creation
+        const run = testAPI.execInteractive(`node ${testAPI.gitMainScript} feature/dirty-branch`);
+        await run.waitForText("Branch 'feature/dirty-branch' does not exist locally or on remote. Create it?", 5000);
+        run.respond('y');
+        await run.waitForEnd(10000);
+        
+        // Verify we're on the new branch
+        const currentBranch = testAPI.exec('git rev-parse --abbrev-ref HEAD').trim();
+        assert.strictEqual(currentBranch, 'feature/dirty-branch', 'Should be on feature/dirty-branch branch');
+        
+        // Verify the uncommitted changes are still there
+        const newStatus = testAPI.exec('git status --porcelain').trim();
+        assert(newStatus.length > 0, 'Should still have uncommitted changes');
+        
+        // Verify the new files exist
+        const uncommittedContent = testAPI.exec('cat uncommitted.txt').trim();
+        assert.strictEqual(uncommittedContent, 'uncommitted content', 'Should have uncommitted file');
+    });
+});
+
+test('custom-branch: git-main exits when user declines to create new branch', async () => {
+    await setupTemporaryTestEnvironment(__dirname, async (testAPI) => {
+        // Verify the branch doesn't exist locally or on remote
+        const localBranches = testAPI.exec('git branch --list feature/declined-branch').trim();
+        assert.strictEqual(localBranches, '', 'Branch should not exist locally');
+        
+        try {
+            testAPI.exec('git ls-remote --exit-code origin feature/declined-branch');
+            assert.fail('Branch should not exist on remote');
+        } catch (error) {
+            // Expected - branch should not exist on remote
+        }
+        
+        // Use interactive test to decline branch creation
+        const run = testAPI.execInteractive(`node ${testAPI.gitMainScript} feature/declined-branch`);
+        await run.waitForText("Branch 'feature/declined-branch' does not exist locally or on remote. Create it?", 5000);
+        run.respond('n');
+        
+        const result = await run.waitForEnd(10000);
+        
+        // Verify the process exited with code 1
+        assert.strictEqual(result.code, 1, 'Should exit with code 1 when user declines');
+        
+        // Verify we're still on the original branch
+        const currentBranch = testAPI.exec('git rev-parse --abbrev-ref HEAD').trim();
+        assert.strictEqual(currentBranch, 'main', 'Should still be on main branch');
+        
+        // Verify the branch was not created
+        const finalBranches = testAPI.exec('git branch --list feature/declined-branch').trim();
+        assert.strictEqual(finalBranches, '', 'Branch should not have been created');
     });
 });
