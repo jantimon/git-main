@@ -36,6 +36,7 @@ Simply run `git-main` in any git repository. The tool will:
 ### Package Manager Support
 
 The tool automatically detects your package manager based on lockfiles:
+
 - `yarn.lock` → uses `yarn --immutable`
 - `pnpm-lock.yaml` → uses `pnpm install --frozen-lockfile`
 - `package-lock.json` → uses `npm ci`

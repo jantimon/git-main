@@ -1,4 +1,8 @@
-import { execSync, type ExecSyncOptions, type SpawnOptions } from "child_process";
+import {
+  execSync,
+  type ExecSyncOptions,
+  type SpawnOptions,
+} from "child_process";
 import { mkdtemp, rm, copyFile, readdir, lstat, mkdir } from "fs/promises";
 import { join, dirname, basename } from "path";
 import { createInteractiveCLI } from "./interactiveSpawn.ts";
@@ -15,7 +19,10 @@ export interface TestAPI {
   baseTempDir: string;
   gitMainScript: string;
   projectRoot: string;
-  exec: (command: string, options?: ExecSyncOptions) => string;
+  exec: (
+    command: string,
+    options?: ExecSyncOptions & { silent?: boolean },
+  ) => string;
   /**
    * Executes a command in the temporary directory with interactive capabilities
    * Example usage:
@@ -26,7 +33,7 @@ export interface TestAPI {
    */
   execInteractive: (
     command: string,
-    options?: SpawnOptions
+    options?: SpawnOptions,
   ) => ReturnType<typeof createInteractiveCLI>;
   applyChange: (fixtureDirPath: string, commitMessage: string) => Promise<void>;
 }
@@ -38,7 +45,7 @@ export interface TestAPI {
  */
 export async function setupTemporaryTestEnvironment(
   testFileDirname: string,
-  testCallback: (api: TestAPI) => Promise<void>
+  testCallback: (api: TestAPI) => Promise<void>,
 ): Promise<void> {
   let baseTempDir: string | undefined; // Needs to be accessible in finally
   const cleanups: ((() => void) | (() => Promise<void>))[] = [];
@@ -55,12 +62,12 @@ export async function setupTemporaryTestEnvironment(
 
   try {
     const newTempdir = await mkdtemp(
-      join(tmpdir(), `git-main-e2e-${basename(testFileDirname)}-base-`)
+      join(tmpdir(), `git-main-e2e-${basename(testFileDirname)}-base-`),
     );
     baseTempDir = newTempdir;
     // Remove the temporary dir and its contents after the test
     cleanups.push(
-      async () => await rm(newTempdir, { recursive: true, force: true })
+      async () => await rm(newTempdir, { recursive: true, force: true }),
     );
 
     const localDir: string = join(baseTempDir, "local");
@@ -77,8 +84,12 @@ export async function setupTemporaryTestEnvironment(
 
     const tempDir: string = localDir; // tempDir for the TestAPI refers to localDir
 
-    const execInTempDir = (command: string, options?: ExecSyncOptions): string => {
+    const execInTempDir = (
+      command: string,
+      options?: ExecSyncOptions & { silent?: boolean },
+    ): string => {
       try {
+        const { silent, ...execOptions } = options || {};
         const output: string = execSync(command, {
           cwd: tempDir,
           stdio: "pipe",
@@ -86,15 +97,19 @@ export async function setupTemporaryTestEnvironment(
           env: {
             ...process.env,
             FORCE_COLOR: "0", // Disable color output for easier parsing
-            ...options?.env,
+            ...execOptions?.env,
           },
-          ...options,
-        }).toString("utf8").trim();
+          ...execOptions,
+        })
+          .toString("utf8")
+          .trim();
         return output;
       } catch (e: any) {
-        console.error(`❌ Error executing command [${command}]:`, e.message);
-        if (e.stdout) console.error("Stdout:", e.stdout.toString());
-        if (e.stderr) console.error("Stderr:", e.stderr.toString());
+        if (!options?.silent) {
+          console.error(`❌ Error executing command [${command}]:`, e.message);
+          if (e.stdout) console.error("Stdout:", e.stdout.toString());
+          if (e.stderr) console.error("Stderr:", e.stderr.toString());
+        }
         throw e;
       }
     };
@@ -107,7 +122,7 @@ export async function setupTemporaryTestEnvironment(
     const initialFixturesPath: string = join(
       testFileDirname,
       "fixtures",
-      "initial"
+      "initial",
     );
     const fixtureFiles: string[] = await readdir(initialFixturesPath);
     for (const file of fixtureFiles) {
@@ -128,7 +143,7 @@ export async function setupTemporaryTestEnvironment(
 
     const applyGitChangeLogic = async (
       fixtureDirPath: string,
-      commitMessage: string
+      commitMessage: string,
     ): Promise<void> => {
       try {
         const changeFixtureFiles: string[] = await readdir(fixtureDirPath);
@@ -145,7 +160,7 @@ export async function setupTemporaryTestEnvironment(
       } catch (error: any) {
         console.error(
           `❌ Error in applyGitChangeLogic (fixture: ${fixtureDirPath}, message: "${commitMessage}"):`,
-          error.message
+          error.message,
         );
         throw error;
       }

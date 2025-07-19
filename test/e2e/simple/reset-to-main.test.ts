@@ -13,7 +13,7 @@ test("reset-to-main: git-main switches to main and resets content from diverged 
     const divergedFixturePath: string = join(
       __dirname,
       "fixtures",
-      "diverged-change"
+      "diverged-change",
     );
     const initialFixturePath: string = join(__dirname, "fixtures", "initial");
 
@@ -21,7 +21,7 @@ test("reset-to-main: git-main switches to main and resets content from diverged 
 
     await testAPI.applyChange(
       divergedFixturePath,
-      "Commit on feature-branch with diverged README"
+      "Commit on feature-branch with diverged README",
     );
 
     testAPI.exec("git checkout feature-branch"); // Make sure we are on the feature branch
@@ -34,21 +34,21 @@ test("reset-to-main: git-main switches to main and resets content from diverged 
     assert.strictEqual(
       currentBranch,
       "main",
-      "Current branch should be main after git-main"
+      "Current branch should be main after git-main",
     );
 
     const readmeContent: string = await readFile(
       join(testAPI.tempDir, "README.md"),
-      "utf-8"
+      "utf-8",
     );
     const initialReadmeContent: string = await readFile(
       join(initialFixturePath, "README.md"),
-      "utf-8"
+      "utf-8",
     );
     assert.strictEqual(
       readmeContent,
       initialReadmeContent,
-      "README.md content should match initial fixture after git-main"
+      "README.md content should match initial fixture after git-main",
     );
   });
 });
