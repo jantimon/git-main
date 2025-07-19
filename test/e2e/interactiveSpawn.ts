@@ -29,7 +29,7 @@ interface WaitForTextRequest {
 export interface InteractiveCLISession {
   waitForText(
     textToMatch: string | RegExp,
-    timeoutMs?: number
+    timeoutMs?: number,
   ): Promise<string>;
   respond(input: string): void;
   waitForEnd(timeoutMs?: number): Promise<InteractiveCLIResult>;
@@ -39,7 +39,7 @@ export interface InteractiveCLISession {
 
 export function createInteractiveCLI(
   command: string,
-  options?: SpawnOptions
+  options?: SpawnOptions,
 ): InteractiveCLISession {
   const [cmd, ...args] = command.split(" ");
   if (!cmd) {
@@ -95,10 +95,10 @@ export function createInteractiveCLI(
         ) {
           matchedPortion = currentOutputBuffer.substring(
             0,
-            match + request.textToMatch.length
+            match + request.textToMatch.length,
           );
           currentOutputBuffer = currentOutputBuffer.substring(
-            match + request.textToMatch.length
+            match + request.textToMatch.length,
           );
         } else if (
           request.textToMatch instanceof RegExp &&
@@ -108,10 +108,10 @@ export function createInteractiveCLI(
           // match[0] is the matched string, match.index is its start
           matchedPortion = currentOutputBuffer.substring(
             0,
-            (match.index || 0) + match[0].length
+            (match.index || 0) + match[0].length,
           );
           currentOutputBuffer = currentOutputBuffer.substring(
-            (match.index || 0) + match[0].length
+            (match.index || 0) + match[0].length,
           );
         } else {
           throw new Error(`Unexpected match type: ${typeof match}`);
@@ -133,8 +133,8 @@ export function createInteractiveCLI(
       clearTimeout(req.timer);
       req.reject(
         new Error(
-          `Process error occurred: ${err.message}. Output received before error: ${currentOutputBuffer}`
-        )
+          `Process error occurred: ${err.message}. Output received before error: ${currentOutputBuffer}`,
+        ),
       );
     });
     waitForTextQueue.length = 0;
@@ -153,11 +153,11 @@ export function createInteractiveCLI(
       req.reject(
         new Error(
           `Process closed (code ${code}, signal ${signal}) before text "${String(
-            req.textToMatch
+            req.textToMatch,
           )}" was found. Timeout was ${
             req.originalTimeout
-          }ms, spent ${timeSpent}ms. Output received: "${currentOutputBuffer}"`
-        )
+          }ms, spent ${timeSpent}ms. Output received: "${currentOutputBuffer}"`,
+        ),
       );
     });
     waitForTextQueue.length = 0;
@@ -177,24 +177,24 @@ export function createInteractiveCLI(
 
     async waitForText(
       textToMatch: string | RegExp,
-      timeoutMs: number = 200
+      timeoutMs: number = 200,
     ): Promise<string> {
       if (processExited && processError) {
         return Promise.reject(
           new Error(
             `Process has already exited with error: ${
               processError.message
-            }. Full output: ${stripAnsi(fullSessionOutput)}`
-          )
+            }. Full output: ${stripAnsi(fullSessionOutput)}`,
+          ),
         );
       }
       if (processExited) {
         return Promise.reject(
           new Error(
             `Process has already exited with code ${exitCode}. Full output: ${stripAnsi(
-              fullSessionOutput
-            )}`
-          )
+              fullSessionOutput,
+            )}`,
+          ),
         );
       }
 
@@ -214,18 +214,18 @@ export function createInteractiveCLI(
           if (typeof match === "number") {
             matchedPortion = currentOutputBuffer.substring(
               0,
-              match + (textToMatch as string).length
+              match + (textToMatch as string).length,
             );
             currentOutputBuffer = currentOutputBuffer.substring(
-              match + (textToMatch as string).length
+              match + (textToMatch as string).length,
             );
           } else {
             matchedPortion = currentOutputBuffer.substring(
               0,
-              (match.index || 0) + match[0].length
+              (match.index || 0) + match[0].length,
             );
             currentOutputBuffer = currentOutputBuffer.substring(
-              (match.index || 0) + match[0].length
+              (match.index || 0) + match[0].length,
             );
           }
           resolve(matchedPortion);
@@ -235,7 +235,7 @@ export function createInteractiveCLI(
         // If not found immediately, queue the request
         const timer = setTimeout(() => {
           const queueIndex = waitForTextQueue.findIndex(
-            (req) => req.timer === timer
+            (req) => req.timer === timer,
           );
           if (queueIndex !== -1) {
             waitForTextQueue.splice(queueIndex, 1); // Remove from queue
@@ -244,11 +244,11 @@ export function createInteractiveCLI(
           reject(
             new Error(
               `Timeout after ${timeSpent}ms waiting for text: "${String(
-                textToMatch
+                textToMatch,
               )}". Output received during wait: "${stripAnsi(
-                currentOutputBuffer
-              )}"`
-            )
+                currentOutputBuffer,
+              )}"`,
+            ),
           );
         }, timeoutMs);
 
@@ -268,7 +268,7 @@ export function createInteractiveCLI(
         child.stdin.write(input + "\n");
       } else {
         console.warn(
-          "CLI Helper: Attempted to respond to a closed or non-writable process."
+          "CLI Helper: Attempted to respond to a closed or non-writable process.",
         );
       }
     },

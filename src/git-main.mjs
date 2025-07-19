@@ -58,7 +58,7 @@ async function installDependencies(packageManager, gitRoot) {
       break;
     case "pnpm":
       await $`cd "${gitRoot}" && pnpm install --frozen-lockfile`.pipe(
-        process.stdout
+        process.stdout,
       );
       break;
     case "npm":
@@ -108,6 +108,98 @@ async function readFileIfExists(filepath) {
   }
 }
 
+/**
+ * Performs initial repository setup operations in parallel for better performance
+ * @returns {Promise<{defaultRemote: string, gitRoot: string}>}
+ */
+async function setupRepository() {
+  const [remoteResult, gitRootResult] = await Promise.all([
+    $`git remote show -n`,
+    $`git rev-parse --show-toplevel`,
+  ]);
+
+  const defaultRemote = remoteResult.stdout.trim();
+  const gitRoot = gitRootResult.stdout.trim();
+
+  if (!defaultRemote) {
+    log.error("No remote repository found");
+    process.exit(1);
+  }
+
+  return { defaultRemote, gitRoot };
+}
+
+/**
+ * Fetches changes and detects package manager configuration in parallel
+ * @param {string} gitRoot - The git repository root path
+ * @returns {Promise<{packageManager: PackageManager | null, originalLockfileContent: string}>}
+ */
+async function fetchAndDetectDependencies(gitRoot) {
+  const [packageManager, originalLockfileContent] = await Promise.all([
+    detectPackageManager(gitRoot),
+    getLockfileContent(gitRoot),
+    $`git fetch`.catch((e) => {
+      if (
+        e instanceof Error &&
+        e.message.includes("fatal: not a git repository")
+      ) {
+        log.error("Not a git repository");
+        process.exit(1);
+      }
+      throw e;
+    }),
+  ]);
+
+  return { packageManager, originalLockfileContent };
+}
+
+/**
+ * Validates branch existence locally and remotely in parallel
+ * @param {string} branchName - The branch to validate
+ * @param {string} defaultRemote - The default remote name
+ * @returns {Promise<{localExists: boolean, remoteExists: boolean}>}
+ */
+async function validateBranchExistence(branchName, defaultRemote) {
+  const validationResults = await Promise.allSettled([
+    $`git rev-parse --quiet --verify ${branchName}`,
+    $`git ls-remote --exit-code ${defaultRemote} ${branchName}`,
+  ]);
+
+  const localExists = validationResults[0].status === "fulfilled";
+  const remoteExists = validationResults[1].status === "fulfilled";
+
+  return { localExists, remoteExists };
+}
+
+/**
+ * Pull optimization leveraging prior fetch. Uses git merge --ff-only which attempts 
+ * fast-forward merge without creating merge commits, falling back to standard pull.
+ * @param {string} mainBranch - The name of the main branch to pull changes into
+ * @param {string} remote - The name of the remote repository to pull from
+ */
+async function quickPull(mainBranch, remote) {
+  try {
+    await $`git merge --ff-only ${remote}/${mainBranch}`;
+    log.success("Fast-forwarded to latest changes");
+  } catch (e) {
+    log.action("Cannot fast-forward, using git pull...");
+    try {
+      const pullResult = await $`git pull`;
+      if (pullResult.stdout.includes("Already up to date.")) {
+        log.info("Repository is already up to date");
+      }
+    } catch (pullError) {
+      if (
+        pullError instanceof Error &&
+        pullError.message.includes("There is no tracking information")
+      ) {
+        log.info(`Branch '${mainBranch}' has no upstream tracking, skipping pull`);
+      } else {
+        throw pullError;
+      }
+    }
+  }
+}
 
 /**
  * Finds branches with deleted remotes (remote tracking branches that are gone)
@@ -119,20 +211,18 @@ async function findBranchesWithDeletedRemotes(mainBranch, defaultRemote) {
   const branchesToDelete = [];
 
   try {
-    // Clean stale remote refs first
-    await $`git remote prune ${defaultRemote}`;
+    // Run cleanup operations in parallel - prune and get branch info concurrently
+    const [, branchResult, currentBranch] = await Promise.all([
+      $`git remote prune ${defaultRemote}`,
+      $`git branch -vv`,
+      $`git rev-parse --abbrev-ref HEAD`.then((result) => result.stdout.trim()),
+    ]);
 
-    // Get branches with remote tracking info
-    const branchOutput = (await $`git branch -vv`).stdout;
-    const branches = branchOutput.split("\n").filter(Boolean);
-
-    const currentBranch = (
-      await $`git rev-parse --abbrev-ref HEAD`
-    ).stdout.trim();
+    const branches = branchResult.stdout.split("\n").filter(Boolean);
 
     for (const line of branches) {
       const match = line.match(
-        /^\s*(\*?\s*)([^\s]+)\s+[a-f0-9]+(?:\s+\[([^\]]+)\])?\s*(.*)/
+        /^\s*(\*?\s*)([^\s]+)\s+[a-f0-9]+(?:\s+\[([^\]]+)\])?\s*(.*)/,
       );
       if (!match) continue;
 
@@ -160,12 +250,11 @@ async function findBranchesWithDeletedRemotes(mainBranch, defaultRemote) {
     return branchesToDelete;
   } catch (e) {
     log.error(
-      `Error finding branches with deleted remotes: ${e instanceof Error ? e.message : e}`
+      `Error finding branches with deleted remotes: ${e instanceof Error ? e.message : e}`,
     );
     return [];
   }
 }
-
 
 async function main() {
   // Argument validation - only allow single branch name argument
@@ -176,11 +265,17 @@ async function main() {
   }
 
   const explicitBranch = args.length === 1 ? args[0] : null;
-  const defaultRemote = (await $`git remote show -n`).stdout.trim();
-  if (!defaultRemote) {
-    log.error("No remote repository found");
-    process.exit(1);
-  }
+
+  // Setup repository and get essential information
+  log.action("Setting up repository...");
+  const { defaultRemote, gitRoot } = await setupRepository();
+
+  // Fetch changes and detect dependencies in parallel
+  log.action("Fetching latest changes and detecting dependencies...");
+  const {
+    packageManager: finalPackageManager,
+    originalLockfileContent: finalOriginalLockfileContent,
+  } = await fetchAndDetectDependencies(gitRoot);
 
   // Determine main branch - use explicit argument or detect main/master
   let mainBranch;
@@ -199,46 +294,29 @@ async function main() {
   /** @type {boolean} whether the branch exists on remote */
   let isRemoteBranch = false;
   if (explicitBranch) {
-    // Check if explicitly provided branch exists locally
-    try {
-      await $`git rev-parse --quiet --verify ${explicitBranch}`;
+    // Validate branch existence in parallel
+    const { localExists, remoteExists } = await validateBranchExistence(
+      explicitBranch,
+      defaultRemote,
+    );
+
+    if (localExists) {
       mainBranch = explicitBranch;
-    } catch {
-      // Branch doesn't exist locally, check if it exists on remote
-      try {
-        await $`git ls-remote --exit-code ${defaultRemote} ${explicitBranch}`;
-        // Branch exists on remote, will checkout and track it later
-        mainBranch = explicitBranch;
-        isRemoteBranch = true;
-      } catch {
-        // Branch doesn't exist locally or on remote, ask to create it
-        const shouldCreate = await confirmAction(
-          `Branch '${explicitBranch}' does not exist locally or on remote. Create it?`
-        );
-        if (!shouldCreate) {
-          process.exit(1);
-        }
-        createNewBranch = explicitBranch;
+    } else if (remoteExists) {
+      // Branch exists on remote, will checkout and track it later
+      mainBranch = explicitBranch;
+      isRemoteBranch = true;
+    } else {
+      // Branch doesn't exist locally or on remote, ask to create it
+      const shouldCreate = await confirmAction(
+        `Branch '${explicitBranch}' does not exist locally or on remote. Create it?`,
+      );
+      if (!shouldCreate) {
+        process.exit(1);
       }
+      createNewBranch = explicitBranch;
     }
   }
-
-  try {
-    log.action("Fetching latest changes...");
-    await $`git fetch`;
-  } catch (e) {
-    if (
-      e instanceof Error &&
-      e.message.includes("fatal: not a git repository")
-    ) {
-      log.error("Not a git repository");
-      process.exit(1);
-    }
-  }
-
-  // Get git root and check package manager changes
-  const gitRoot = (await $`git rev-parse --show-toplevel`).stdout.trim();
-  const packageManager = await detectPackageManager(gitRoot);
 
   const currentBranch = (
     await $`git rev-parse --abbrev-ref HEAD`
@@ -253,8 +331,8 @@ async function main() {
       console.log("");
       log.warning(
         `You are on ${chalk.bold(
-          mainBranch
-        )} branch with uncommitted changes:\n`
+          mainBranch,
+        )} branch with uncommitted changes:\n`,
       );
       const files = (await $`git ls-files -mo --exclude-standard`).stdout;
       files
@@ -278,8 +356,6 @@ async function main() {
     }
   }
 
-  const originalLockfileContent = await getLockfileContent(gitRoot);
-
   // Only pull on main if we're not creating a new branch on dirty state
   if (!(createNewBranch && status)) {
     // Switch to main branch if needed
@@ -288,47 +364,27 @@ async function main() {
       if (isRemoteBranch) {
         log.action(`Switching to remote branch ${chalk.bold(mainBranch)}...`);
         await $`git checkout -b ${mainBranch} ${defaultRemote}/${mainBranch}`;
-      } 
+      }
       // If we are not going to create a new branch, checkout the main branch
       // that allows branching of another branch
       else if (!createNewBranch) {
-      log.action(`Switching to ${chalk.bold(mainBranch)} branch...`);
+        log.action(`Switching to ${chalk.bold(mainBranch)} branch...`);
         await $`git checkout ${mainBranch}`;
       } else {
-        log.info(
-          `Branching off from ${chalk.bold(currentBranch)} branch`
-        );
+        log.info(`Branching off from ${chalk.bold(currentBranch)} branch`);
       }
     }
 
     // Pull changes
     log.action("Pulling latest changes...");
-    try {
-      const pullResult = await $`git pull`;
-      if (pullResult.stdout.includes("Already up to date.")) {
-        log.info("Repository is already up to date");
-      }
-    } catch (e) {
-      // Handle case where custom branch has no upstream tracking
-      if (
-        explicitBranch &&
-        e instanceof Error &&
-        e.message.includes("There is no tracking information")
-      ) {
-        log.info(
-          `Branch '${mainBranch}' has no upstream tracking, skipping pull`
-        );
-      } else {
-        throw e;
-      }
-    }
+    await quickPull(mainBranch, defaultRemote);
   }
 
   // Compare lockfile contents after pull
   let hasLockfileChanges = false;
-  if (packageManager) {
+  if (finalPackageManager) {
     const newLockfileContent = await getLockfileContent(gitRoot);
-    hasLockfileChanges = originalLockfileContent !== newLockfileContent;
+    hasLockfileChanges = finalOriginalLockfileContent !== newLockfileContent;
   }
 
   // Create branch if needed (after pulling latest changes)
@@ -341,7 +397,10 @@ async function main() {
     // Auto-cleanup branches with deleted remotes
     log.action("Cleaning up branches with deleted remotes...");
 
-    const branchesToDelete = await findBranchesWithDeletedRemotes(mainBranch, defaultRemote);
+    const branchesToDelete = await findBranchesWithDeletedRemotes(
+      mainBranch,
+      defaultRemote,
+    );
 
     if (branchesToDelete.length === 0) {
       log.info("No branches with deleted remotes found");
@@ -354,17 +413,17 @@ async function main() {
       log.success(
         `Deleted ${branchesToDelete.length} branch${
           branchesToDelete.length > 1 ? "es" : ""
-        } with deleted remotes`
+        } with deleted remotes`,
       );
     }
   }
 
-  if (hasLockfileChanges && packageManager) {
+  if (hasLockfileChanges && finalPackageManager) {
     await spinner(
-      `Installing dependencies with ${chalk.bold(packageManager)}...`,
-      () => installDependencies(packageManager, gitRoot)
+      `Installing dependencies with ${chalk.bold(finalPackageManager)}...`,
+      () => installDependencies(finalPackageManager, gitRoot),
     );
-  } else if (packageManager) {
+  } else if (finalPackageManager) {
     log.info(`${await getLockfile(gitRoot)} is unchanged`);
   }
 
@@ -376,5 +435,5 @@ main().then(
   (error) => {
     log.error(`Error: ${error.message}`);
     process.exit(1);
-  }
+  },
 );

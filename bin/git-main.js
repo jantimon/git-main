@@ -1,2 +1,2 @@
 #!/usr/bin/env node
-import '../dist/git-main.js'
+import "../dist/git-main.js";
