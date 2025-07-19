@@ -173,9 +173,9 @@ async function validateBranchExistence(branchName, defaultRemote) {
 
 /**
  * Pull optimization leveraging prior fetch. Uses git merge --ff-only which attempts 
- * fast-forward merge without creating merge commits, falling back to standard pull
- * @param {string} mainBranch 
- * @param {string} remote
+ * fast-forward merge without creating merge commits, falling back to standard pull.
+ * @param {string} mainBranch - The name of the main branch to pull changes into
+ * @param {string} remote - The name of the remote repository to pull from
  */
 async function quickPull(mainBranch, remote) {
   try {
